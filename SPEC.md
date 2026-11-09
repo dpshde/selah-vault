@@ -1,12 +1,12 @@
-# Selah Vault, version 1.2
+# Selah Vault, version 1.3
 
 > Thy word have I hid in mine heart, that I might not sin against thee. (Psalm 119:11)
 
 Selah Vault (formerly Hidden Word) is a small format for Bible highlights and notes, kept in step across a person's devices by a server that can't read them.
 
-There is one way for another app to work with a library: **connect** (section 4). The person approves a grant on `/connect`, and the app reads and writes highlights with it over HTTPS.
+There is one way for another app to work with a library: **connect** (section 4). The person approves a grant on `/connect`, and the app reads and writes with it over HTTPS (highlights today; experimental spaced-repetition progress in 1.6).
 
-1. **Records**: what a highlight, note, color or the library's name looks like as JSON.
+1. **Records**: what a highlight, note, color, the library's name, or (experimental) SRS progress looks like as JSON.
 2. **Backup files**: a library as one readable JSON Lines file, to save and restore.
 3. **Merging**: one rule that decides which version of a record wins, everywhere.
 4. **Connecting an app**: a grant, its scopes, and the highlights API.
@@ -126,6 +126,84 @@ A library's name for people ("Personal", "Family devotions") is a record too, so
 - An app that has a name for a library with no `library name` record MAY write one with `updated` 0, after it has synced with its server, so the record from any other device has had the chance to arrive. Any rename beats it, and two such records settle by the tie rule.
 - Apps that don't show names keep the record like any other (section 1), and never show it as a highlight or note.
 
+### 1.6 Spaced-repetition progress (experimental)
+
+Apps that schedule verse or passage reviews (Proofs and peers) MAY store progress in the same library as highlights. The shape is app-neutral. Kinds use the experimental `x-` prefix now; a later 1.x MAY promote them to first-class `srs-log` and `srs-state` without changing meaning. A Proofs-only `x-proofs` kind is not part of this contract.
+
+**Source of truth.** An append-only **review log** is the history. FSRS (or any scheduler) state is a **derived cache** that a client may delete and rebuild by replaying the log. Highlight records (1.2) and the highlights API (4.3) are unchanged.
+
+**Card identity.** A card is a passage plus a unit, not a highlight id:
+
+- `passage`: a canonical reference (1.1), verse or range.
+- `unit`: a short token of lowercase letters, digits and `-` (examples: `verse`, `passage`, `ref-recall`).
+
+The card key is `passage + "#" + unit` (for example `JHN.3.16#verse`, `ROM.5.3-5#passage`). Per-app settings that are not shared scheduling state (a Proofs rung, UI flags) live under `apps.<appId>` on the state record and MUST NOT affect card identity.
+
+#### Review log buckets (`x-srs-log`)
+
+Each review is an immutable event. Events are stored in **month buckets** so a busy library stays under the item and size limits (5.3, 5.5):
+
+```json
+{"kind":"x-srs-log","ref":"JHN.3.16#verse/2026-11","v":1,"updated":1793000000,
+ "card":{"passage":"JHN.3.16","unit":"verse"},
+ "events":[
+   {"id":"01JBEXAMPLEevent0000000001","reviewedAt":1792999000,"rating":3,
+    "unit":"verse","client":"proofs-web","device":"q8Zr0aXv5Tg","v":1}
+ ]}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ref` | string | `{card key}/{yyyy-mm}` in UTC, or `{card key}/cold` / `{card key}/cold-{n}` after compaction |
+| `v` | integer | Record schema version. Writers set it; readers keep unknown fields (section 1) |
+| `card` | object | `passage` and `unit` matching the card key |
+| `events` | array | Review events in this bucket |
+
+Each event:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Unique event id (ULID or UUID). Dedup key for merges |
+| `reviewedAt` | integer | When the review happened (Unix seconds) |
+| `rating` | integer | Scheduler rating (FSRS: 1–4). Other scales document their range in `v` notes |
+| `unit` | string | Unit for this review (usually the card's) |
+| `client` | string | Optional. App id (`proofs-web`, …) |
+| `device` | string | Optional. Device or install id |
+| `v` | integer | Event schema version |
+
+Events are never edited in place. To undo history, see Reset below.
+
+**Merging log buckets.** Section 3 still chooses one encrypted version of a `kind`+`ref` by `updated` (then JSON size). For `x-srs-log`, that is not enough on its own: two devices can each append different events to the same month. When a client holds two live versions of the same log record (local and pulled), it MUST build a new version whose `events` are the **set union** of both, deduped by event `id`, then set `updated` by the writing rule (3) and push that version. Dropping an event that either side still has is a bug. The same union applies when importing a file (2). Ordinary LWW without union is wrong for this kind.
+
+**Compaction.** When old months are no longer needed as separate items, a client MAY copy their events into a `…/cold` (or `…/cold-{n}`) bucket, write that bucket, and write deleted tombstones (section 1) for the month refs it folded. Split a bucket before its JSON would exceed the 16 KiB SHOULD (5.3). Prefer keeping raw events so any algorithm version can replay; a rolled-up checkpoint alone is not a substitute for the log.
+
+**Size budget.** A server SHOULD accept about 20,000 items and 8,000,000 blob characters per library (5.5). Minimum padded items still consume a slot. SRS writers SHOULD keep total SRS items (log buckets + state) well under that ceiling so highlights and notes still fit—on the order of a few thousand SRS items for a typical library—and MUST stop adding buckets rather than blow the library limit.
+
+#### Derived state (`x-srs-state`)
+
+```json
+{"kind":"x-srs-state","ref":"JHN.3.16#verse","v":1,"updated":1793000000,
+ "algo":"fsrs-6","paramsHash":"sha256:3a1f…",
+ "state":{"due":1793600000,"stability":2.5,"difficulty":5.2,"reps":4,"lapses":0},
+ "apps":{"proofs":{"rung":2}}}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ref` | string | The card key (`passage#unit`) |
+| `algo` | string | Scheduler id and version (`fsrs-6`, …) |
+| `paramsHash` | string | Hash of the parameter set used to produce `state` |
+| `state` | object | Scheduler fields. Shape follows `algo`; keep unknown keys |
+| `apps` | object | Optional. Namespaced per-app extras; other apps preserve them |
+
+`x-srs-state` is disposable. If `algo` or `paramsHash` does not match what the client uses, the client MUST replay the card's log (all live `x-srs-log` buckets for that card key, in `reviewedAt` then `id` order) and rewrite `state`. Conflicts on the cache MAY use the ordinary merge rule (3); the log remains authoritative.
+
+**Reset and deletion.** To clear a card's progress: write deleted records for its `x-srs-state` and every `x-srs-log` bucket (section 1), or append a single event `{"id":…,"reviewedAt":…,"rating":0,"unit":…,"reset":true,"v":1}` in the current month and treat earlier events as ignored when replaying from that event's `id`. Tombstones spread like any deletion. A server epoch change (5.6) refills every record, SRS included; clients do not special-case SRS beyond pushing their full set.
+
+**Privacy and grants.** Log and state records are encrypted items like any other (5.3, 9). Grant scope `read` covers them. Writing them through a grant needs `srs:write` (4.2). Sync-key holders write any kind.
+
+**Conformance.** Shared vectors (fixed event log → expected FSRS state for a pinned `algo` and `paramsHash`) SHOULD live with client test suites (TypeScript and Swift). Pin the same FSRS implementation version on each platform so replay matches.
+
 ## 2. Backup files
 
 A library file is UTF-8 JSON Lines (`.jsonl`, media type `application/x-ndjson`), one JSON object per line, readable by people and by any JSON parser. Blank lines are ignored.
@@ -172,8 +250,9 @@ The app sends the person to `https://<site>/connect?return=<url>&state=<random>&
 |---|---|---|
 | `read` | `GET /v1/lib/{lib}` | `ek` |
 | `highlights:write` | `POST /v1/lib/{lib}` | `mk` |
+| `srs:write` | `POST /v1/lib/{lib}` | `mk` |
 
-No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods. Apps with `highlights:write` write only `highlight` records.
+No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods. Apps with `highlights:write` write only `highlight` records. Apps with `srs:write` write only experimental SRS kinds (`x-srs-log`, `x-srs-state`, and later first-class `srs-*` if promoted). A connect request MAY ask for more than one write scope; each still comes with `mk` when any write scope is granted.
 
 ### 4.3 The highlights API
 
@@ -366,7 +445,7 @@ The `conformance/` folder checks an implementation against this spec. Passing it
 
 ## 11. Versioning
 
-This is version 1.2. Every 1.x version keeps these working the same way:
+This is version 1.3. Every 1.x version keeps these working the same way:
 
 - Records (section 1), the merge rule (3) and the writing rule for `updated`.
 - Library files and their header, `"hidden-word": 2` (2).
@@ -381,6 +460,13 @@ This is version 1.2. Every 1.x version keeps these working the same way:
 **Deprecation.** A feature to be removed is first marked deprecated here, in a 1.x version, and keeps working for the rest of 1.x. It's removed only in 2.0.
 
 Not covered: the reference web app's screens and storage, and the reference Worker's extras (`/mcp`, `/config.json`, `/api/client-error`).
+
+## Changes from 1.2
+
+Compatible (section 11): a 1.2 client or server is a 1.3 one.
+
+- Experimental spaced-repetition progress records (1.6): append-only `x-srs-log` buckets, derived `x-srs-state`, card keys from passage + unit, set-union merge of events, compaction and reset rules. Highlight records and the highlights API are unchanged.
+- Grant scope `srs:write` for those kinds (4.2). The server still only distinguishes read vs POST; clients honor the write-kind rules.
 
 ## Changes from 1.1
 
