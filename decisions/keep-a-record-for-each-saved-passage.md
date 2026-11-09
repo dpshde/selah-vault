@@ -26,7 +26,7 @@ Highlights don't fill the gap. A highlight is one record per verse (SPEC.md 1.2)
 ## Consequences
 
 - Two devices that save the same passage while apart write the same `kind` and `ref`, so the merge rule leaves one record and one schedule.
-- Removing a passage hides nothing else: its notes and review events stay, and saving it again brings the history back.
+- Removing a passage deletes nothing else: its notes and review events stay. Its cards are suspended, so a removed passage stops coming up for review, and saving it again resumes them with their history.
 - An app that builds a deck from highlights now has to write a `passage` record when a person takes a range up.
 - Two apps never write the same record for their own state, so they can't overwrite each other.
 - The vault spec doesn't grow with each new use of a passage. What an app asks, grades and counts is specified by the app.

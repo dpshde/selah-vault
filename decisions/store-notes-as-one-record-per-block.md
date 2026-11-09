@@ -15,11 +15,11 @@ A note was one `note` record with a `body`. Two devices editing different bullet
 - A note is a tree of `block` records (SPEC.md 1.3): `ref` (`b_…`), required `outline`, `parent`, `rank`, plain `text`, optional `passage` and `card`.
 - Notes are an extension of a saved passage (see [Keep a record for each saved passage](keep-a-record-for-each-saved-passage.md)): a block's `passage` is the passage's ref. There is no field pointing at a highlight.
 - Siblings order by fractional `rank`, up to 128 characters. A writer never mints a rank ending in `0`, so there is always room between two ranks. When there is none, it moves one neighbor. No whole-parent rebalance, because every rewritten block would beat an offline text edit.
-- Each block merges on its own. A conflict copy carries `conflictOf` and never the original's `card.id`. A cycle breaks at its smallest `ref`. A missing parent makes an orphan. Readers don't cascade deletes; a writer deleting a bullet tombstones its subtree.
-- Migration and import derive ids: `b_` + base64url(SHA-256(source))[:22], with vectors in SPEC.md section 10.
+- Each block merges on its own. A conflict copy carries `conflictOf` and never the original's `card.id`. A cycle breaks at its smallest `ref`. A missing parent makes an orphan, healed to a root of its outline: a deleted record keeps no `parent`, so there is no ancestor to find. Readers don't cascade deletes; a writer deleting a bullet tombstones its subtree.
+- Migration and import derive ids: `b_` + base64url(SHA-256(source))[:22], with vectors in SPEC.md section 10. An import also uses fixed ranks (`a00000V`, `a00001V`, …) and the source note's own times, so two devices that import one note write the same records and their siblings can't interleave.
 - A legacy note is hidden once its block exists, live or deleted, and is migrated again when its `updated` is the larger. The note itself is never tombstoned by a migrating app.
 - A `basic` card is one card keyed by `card.id`. A `cloze` block is one card per hole, keyed `card.id#cN`.
-- A card is paused with a `suspend` event in the review log, not a field on the block, so there is one way to pause.
+- A card is paused with a `suspend` event in the review log, not a field on the block, so there is one way to pause. `card` says a bullet is a flashcard and the log says what happened to it: the card is in the deck when the block is live, `card` names it, and the log hasn't suspended or dropped it.
 - Collapsed state stays on the device.
 
 ## Consequences

@@ -24,11 +24,23 @@ Do not use a raw Margin block `id` as `ref`: those ids are unique per note, not 
 | Margin | Vault |
 |---|---|
 | One note (`osis`, `slug`, …) | Root `block`: `ref` from `margin-note:…`, `outline` = that `ref`, `parent` = `null`, `passage` = USFM(`osis`), `rank` = `"a1"` |
-| Each `blocks[]` entry | Child `block`: `ref` from `margin-block:…`, `outline` = root `ref`, `parent` from the indent tree (previous shallower block), increasing `rank` among siblings (none ending in `0`), `passage` copied from the root, `text` from Margin `text` |
+| Each `blocks[]` entry | Child `block`: `ref` from `margin-block:…`, `outline` = root `ref`, `parent` from the indent tree (the nearest earlier block with a smaller indent, else the root), `rank` from the fixed sequence below, `passage` copied from the root, `text` from Margin `text` |
 | `attachments`, `bookmarked`, `source`, `agent_*` | `apps.margin.*` on the root (or the block that carried them) |
 | Empty / bookmark-only notes | Root with empty `text` and `apps.margin.bookmarked` as needed |
 
 Export MAY rebuild Margin `blocks[]` by walking children depth-first and setting `indent` from depth. Overlapping Margin notes (verse vs range) stay separate roots: compose, don't absorb.
+
+## The same records on every device
+
+Two devices that import the same Margin note MUST write byte-for-byte the same fields, so the merge rule (SPEC §3) has nothing to choose between and siblings from two imports can't interleave:
+
+- **Ranks.** The root's `rank` is `a1`. The `k`-th child of a parent, counting from 0 in Margin's order, gets `a` + `k` as five decimal digits + `V`: `a00000V`, `a00001V`, `a00002V`, … These sort in order, never end in `0`, and leave room between any two for a later insert. Importers MUST use exactly these.
+- **Times.** Every block of a note gets `updated` = the note's `updated_at` and `created` = its `created_at`, each as whole Unix seconds, rounded down. Importers MUST NOT use the time of the import.
+- **Nothing else varies.** The root's `text` is empty unless the mapping above says otherwise, and `v` is `1`.
+
+A later import of a note that changed in Margin has a larger `updated`, so its blocks win one by one. A block that the newer note no longer has is left as it was; the importer SHOULD delete it (SPEC §1.3, "Subtree delete").
+
+SPEC §10 has the records for one note of three blocks, and `conformance/fixtures.json` (`marginImport`) has them in full.
 
 ## Legacy vault `note`
 

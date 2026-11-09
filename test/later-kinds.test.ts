@@ -20,9 +20,13 @@ const LATER: Rec[] = [
   { kind: "passage", ref: "JHN.3.16-18", v: 1, updated: 1793000000, created: 1792000000 },
   { kind: "block", ref: "b_RvrIbWBdj2CJjUQr0YSxAq", v: 1, updated: 1793000000, outline: "b_RvrIbWBdj2CJjUQr0YSxAq", parent: null, rank: "a1", text: "Plain text.", passage: "JHN.3.16-18" },
   {
-    kind: "srs-log", ref: "q8Zr0aXv5Tg/2026-11-09", v: 1, updated: 1793000100, client: "proofs-web", tz: -360,
+    kind: "srs-log", ref: "q8Zr0aXv5Tg/1", v: 1, updated: 1793000100, date: "2026-11-09", tz: -360, client: "proofs-web",
     cards: ["JHN.3.16-18#text", "x-proofs:q1-s1"], cols: ["x-proofs-rung", "x-proofs-hints"],
     events: [[0, 1792999000, "add"], [0, 1792999010, 3], [0, 1792999400, 2, "R2b", 1], [1, 1793000000, 1], [0, 1793000100, "reset"]],
+  },
+  {
+    kind: "srs-archive", ref: "q8Zr0aXv5Tg/2025/1", v: 1, updated: 1793200000, base: 0, cards: ["ROM.8.28#text"],
+    days: [["2025-12-30", -360, 1767100000, [[0, 0, "add"], [0, 10, 3]]]],
   },
 ];
 
@@ -91,6 +95,21 @@ describe("a pre-1.3 library that gains 1.3 kinds", () => {
     await b.sync();
     for (const r of LATER) expect(b.find(r.kind as string, r.ref as string)).toEqual(r);
     expect((b.find("note", "JHN.3.16-18") as Rec).body).toBe("Edited.");
+  });
+
+  test("a deleted record of a later kind is kept, and deletes the copy this device holds", async () => {
+    const a = await Library.open({ keyText: await formatKey(newKey()), store: memoryStore() });
+    await a.merge(LATER);
+    const gone = { kind: "srs-log", ref: "q8Zr0aXv5Tg/1", updated: 1793300000, deleted: true };
+    expect(await a.merge([gone])).toBe(1);
+    expect(a.find("srs-log", "q8Zr0aXv5Tg/1")).toBeNull();
+
+    // The deletion travels in a backup too, so it reaches the next device.
+    const b = await Library.open({ keyText: await formatKey(newKey()), store: memoryStore() });
+    await b.merge(LATER);
+    await b.merge(parseJsonl(a.toFile({ deleted: true })));
+    expect(b.find("srs-log", "q8Zr0aXv5Tg/1")).toBeNull();
+    expect(b.find("passage", "JHN.3.16-18")).not.toBeNull();
   });
 
   test("a malformed record of an unknown kind is still refused", async () => {

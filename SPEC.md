@@ -23,8 +23,8 @@ A record is a JSON object. Every record has:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `highlight`, `passage`, `block`, `note` (legacy), `srs-log`, `color`, `library`, or an app's own kind starting with `x-` |
-| `ref` | string | What the record is about: a canonical reference (1.1), for `block` a block id (1.3), for `srs-log` a device and day (1.7), for `color` a color id, for `library` the setting's name |
+| `kind` | string | `highlight`, `passage`, `block`, `note` (legacy), `srs-log`, `srs-archive`, `color`, `library`, or an app's own kind starting with `x-` |
+| `ref` | string | What the record is about: a canonical reference (1.1), for `block` a block id (1.3), for `srs-log` and `srs-archive` a device and a number (1.7), for `color` a color id, for `library` the setting's name |
 | `v` | integer | Optional on older records. Schema version for this kind (1.3+). Readers that do not know a newer `v` MUST keep the record and show it best-effort. Writers MUST NOT lower `v` when editing a record that already has one |
 | `updated` | integer | When the record last changed, in Unix seconds (see section 3) |
 | `deleted` | `true` | Optional. The record was deleted |
@@ -41,7 +41,7 @@ A deleted record is `{"kind": …, "ref": …, "updated": …, "deleted": true}`
 |---|---|---|
 | `passage` (1.6) | A verse or range the person saved. The core | Its `ref`, a canonical reference |
 | `block` (1.3) | An extension: one bullet of a note | Its `passage` field |
-| `srs-log` (1.7) | An extension: a device's review events | Card keys that start with the passage's `ref` |
+| `srs-log`, `srs-archive` (1.7) | An extension: a device's review events, by day and then folded by year | Card keys that start with the passage's `ref` |
 | `x-<appId>…` | An app's own extension | Either of those two ways |
 | `highlight` (1.2) | Color on one verse's text | Nothing stored: the same verses |
 | `color` (1.4), `library` (1.5) | Library-wide settings | Not tied to one |
@@ -158,7 +158,7 @@ Section 3 still picks one version of each `kind`+`ref` by `updated` (then JSON s
 - **Same block:** LWW on the whole record. Concurrent text edits can lose one side. An app that wants to keep both MAY write the losing text as a **conflict copy**: a new block (`ref` freshly minted, **no** `card`, or a newly minted `card.id` if it must be a card), same `outline` and `parent`, a `rank` beside the winner, and `conflictOf` set to the original `ref`. Prefer small, frequent writes.
 - **Moves / reparent:** changing `parent` and/or `rank` is an ordinary edit. Concurrent moves: LWW.
 - **Cycles:** if following `parent` links from a block returns to itself, break the cycle at the live block in the cycle whose `ref` is smallest (UTF-8 byte order): treat that block's `parent` as `null` for display and SHOULD write a repair with `parent: null` and a fresh `updated`. If `parent` points at a missing or deleted ref, treat the block as an orphan under its `outline` (parent null for display) and SHOULD heal the same way.
-- **Orphans:** when a parent is deleted, children stay live (`outline` and `passage` on every block keep them findable). Readers MUST still show them. Clients SHOULD heal by setting `parent` to the nearest live ancestor in the same `outline`, or to `null`. Readers MUST NOT cascade-delete children when a parent is tombstoned.
+- **Orphans:** when a parent is deleted, children stay live (`outline` and `passage` on every block keep them findable). Readers MUST still show them. Clients SHOULD heal by writing `parent: null`, which makes the block a root of its `outline`. There is no ancestor to climb to: a deleted record keeps no `parent`. Readers MUST NOT cascade-delete children when a parent is tombstoned.
 - **Subtree delete:** when a person deletes a bullet, the writer MUST tombstone that block **and every live descendant** in the same `outline` (one POST when they fit, ≤100 items). That is a writer duty; it is separate from the reader no-cascade rule.
 - **Structural batches:** indent/outdent/move that touch several blocks SHOULD go in one POST when they fit.
 
@@ -175,6 +175,8 @@ A block opts into scheduling with `card`:
 - **`cloze`:** cloze holes are `{{cN::answer}}` or `{{cN::answer::hint}}` in `text` (`N` ≥ 1). A literal `{{` is written as `\{{`. Each distinct `N` is its own card, with card key `card.id` + `#c` + `N` (for example `c_01JEXAMPLECARD000000001#c2`), scheduled on its own. Holes that share an `N` are hidden together. Nothing about which hole comes next is stored: each has its own history.
 
 Conflict copies MUST drop `card` or mint a new `card.id` (never copy the original id). To pause a card without losing its history, write a `suspend` event for its card key (1.7), one for each hole of a cloze block; nothing on the block changes. Clearing `card` means the bullet is no longer a flashcard; the review history for its card keys stays in the log.
+
+`card` says a bullet is a flashcard, and the log says what has happened to its cards. Both decide whether a card is in the deck, by the rule in 1.7, "The deck": the block is live, its `card` names the card, and the log hasn't suspended or dropped it. A writer that sets `card` SHOULD write an `add` event for its cards, and one that clears it SHOULD write `drop`.
 
 #### Size and library caps
 
@@ -205,7 +207,7 @@ A note and its migrated block are two records for one piece of writing, so these
 
 #### Margin Bible import
 
-Normative mapping lives in [docs/notes-import.md](docs/notes-import.md) (Margin `library-snapshot` / MCP shapes are external). Summary: one root block per Margin note; children from the indent tree; always derive vault `ref` with the deterministic hash rule above (do not assume Margin block ids are library-unique); stash Margin-only fields under `apps.margin`.
+Normative mapping lives in [docs/notes-import.md](docs/notes-import.md) (Margin `library-snapshot` / MCP shapes are external). Summary: one root block per Margin note; children from the indent tree; always derive vault `ref` with the deterministic hash rule above (do not assume Margin block ids are library-unique); give siblings the fixed ranks and every block the note's own times, so two devices that import one note write the same records; stash Margin-only fields under `apps.margin`.
 
 ### 1.4 Colors
 
@@ -262,7 +264,7 @@ A saved passage says "this verse, or this range, is one of mine". It is the core
 - **Saving** writes the record. Saving a passage that is already saved changes nothing.
 - **A library's passages** are its live `passage` records, and only those. Saved means the person chose it: an app MUST NOT save a passage because a curriculum or a reading plan contains it.
 - **Overlap.** `JHN.3.16` and `JHN.3.16-18` are two passages, each saved in its own right. Apps MUST NOT merge, split or absorb them on a person's behalf.
-- **Removing** a passage is a deleted record (section 1). Nothing attached to it is deleted with it. Saving it again finds everything where it was.
+- **Removing** a passage is a deleted record (section 1). Nothing attached to it is deleted with it, and saving it again finds everything where it was. An extension MAY set its own data aside while the passage is gone: review history suspends the passage's cards and resumes them when it is saved again (1.7, "Removing a passage").
 - **Highlights are separate.** A highlight colors a verse's text (1.2) and a saved passage keeps a verse or range; neither needs the other. An app that offers highlighted ranges as things to keep writes the `passage` record when the person takes one up.
 
 #### Extending a passage
@@ -277,7 +279,7 @@ The `passage` record stays this small on purpose. An extension is anything that 
    | Shape | For | Merges by | Defined by |
    |---|---|---|---|
    | One record per thing | Things a person makes and edits: a note's bullet, a tag, a collection | Section 3, each record on its own | `block` (1.3) |
-   | A log per device | Things that happen: a review, a reading, a prayer | Never: one writer per record | `srs-log` (1.7), "Log buckets" |
+   | A log per device | Things that happen: a review, a reading, a prayer | Never: one writer per record | `srs-log` and `srs-archive` (1.7), "Log buckets" and "Archive" |
    | A field on the passage | A small setting that is rarely written | Section 3, the whole `passage` record | `apps.<appId>` above |
 
 5. **Derive what follows from history.** State that events produce (a schedule, a streak, how far up a ladder a passage has got) is worked out by replaying a log, never stored in a field two devices both write.
@@ -287,7 +289,7 @@ A reader that doesn't know an extension keeps its records (section 1) and shows 
 
 ### 1.7 Review history (experimental)
 
-Apps that schedule reviews (Proofs and peers) MAY keep an append-only review log in the library. This subsection is **experimental** for 1.x (section 11). The kind name `srs-log` is final.
+Apps that schedule reviews (Proofs and peers) MAY keep an append-only review log in the library. This subsection is **experimental** for 1.x (section 11). The kind names `srs-log` and `srs-archive` are final.
 
 **The log is the truth.** Scheduler (FSRS) state is a cache each device rebuilds by replaying the log, and is never synced: it depends on the scheduler's parameters, and two clients with different parameters would rewrite each other's records forever. Which cards are in a person's deck is worked out from the log too.
 
@@ -314,14 +316,14 @@ A **unit** is one thing to know about a passage, scheduled apart from the others
 | `ref` | Given the words, recalling the reference |
 | `x-<appId>-<name>` | An app's own |
 
-How a review was asked (multiple choice, cloze, first letters, typed, how much help) is not a unit. It is detail about one review and goes in a column. An app schedules the units it knows, and keeps events for units it doesn't.
+Each unit of a passage is its own card, with its own schedule. How a review was asked (multiple choice, cloze, first letters, typed, how much help) is not a unit. It is detail about one review and goes in a column. An app schedules the units it knows, and keeps events for units it doesn't.
 
 #### Log buckets
 
-Each **device** owns its buckets, and one bucket holds one day of that device's events for many cards. This is the log shape of 1.6; an app's own log (`x-<appId>-log`, say) follows everything under this heading except the meaning of `what`.
+Each **device** owns its buckets, and one bucket holds one day of that device's events for many cards. This is the log shape of 1.6; an app's own log (`x-<appId>-log`, say) follows everything under this heading and under "Archive" except the meaning of `what`.
 
 ```json
-{"kind":"srs-log","ref":"q8Zr0aXv5Tg/2026-11-09","v":1,"updated":1793000100,"client":"proofs-web","tz":-360,
+{"kind":"srs-log","ref":"q8Zr0aXv5Tg/1","v":1,"updated":1793000100,"date":"2026-11-09","tz":-360,"client":"proofs-web",
  "cards":["JHN.3.16-18#text","x-proofs:q1-s1"],
  "cols":["x-proofs-rung","x-proofs-hints"],
  "events":[
@@ -335,10 +337,12 @@ Each **device** owns its buckets, and one bucket holds one day of that device's 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `ref` | string | `{deviceId}/{yyyy-mm-dd}`, then `{deviceId}/{yyyy-mm-dd}/{n}` (`n` from 1) if that fills. The date is the device's local date when the bucket was started |
+| `ref` | string | `{deviceId}/{slot}`. A slot is a whole number from 1: a place to keep a day, which says nothing about which day. Slots are used again once their day is archived |
 | `v` | integer | Record schema version. Current writers use `1`. It covers the events too |
+| `date` | string | The device's local date when the bucket was started, as `yyyy-mm-dd` |
+| `part` | integer | Optional, default 0. A day that outgrows one bucket goes on in another slot, with the same `date` and the next `part` |
+| `tz` | integer | The device's offset from UTC, in minutes east, when the bucket was started. Writers SHOULD always set it. With `date` it says which day the person lived these events in, for streaks and daily counts |
 | `client` | string | Optional. The app id of the app that owns this device id |
-| `tz` | integer | Optional. The device's offset from UTC, in minutes east, when the bucket was started. With `ref`'s date it says which day the person lived these events in, for streaks and daily counts |
 | `cards` | array | The card keys this bucket's events refer to, each once |
 | `cols` | array | Optional. Names of the columns events carry after `what` |
 | `events` | array | The events, oldest first |
@@ -356,19 +360,19 @@ A column name is `x-<appId>-<name>`: this version defines none of its own. Colum
 
 Readers MUST skip an event whose `what` they don't know, MUST ignore columns they don't know, and MUST keep both.
 
-**Device ids.** A device id is 1–32 letters, digits, `-` or `_`. Each install of each app mints its own from at least 9 random bytes, as the reference client does for a backup file's `device` (2). An app connected with a grant mints its own too: it never borrows the vault app's. Only the install that minted an id writes buckets under it, so the one merge rule (3) is always right for a bucket, and a 1.2 client that pushes back a stale copy of some other record can't lose anyone's reviews.
+**Device ids.** A device id is 1–32 letters, digits, `-` or `_`. Each install of each app mints its own from at least 9 random bytes, as the reference client does for a backup file's `device` (2). An app connected with a grant mints its own too: it never borrows the vault app's. Only the install that minted an id writes records under it, so the one merge rule (3) is always right for them, and a 1.2 client that pushes back a stale copy of some other record can't lose anyone's reviews.
 
-**Appending.** A bucket only grows. A writer adds to the end of `cards`, `cols` and `events`, and never edits, reorders or removes anything in them. That makes an event's id its bucket's `ref` + `:` + its index in `events` (`q8Zr0aXv5Tg/2026-11-09:3`), with no id stored.
+**Appending.** A bucket only grows. A writer adds to the end of `cards`, `cols` and `events`, and never edits, reorders or removes anything in them. An event needs no id of its own: it is the one at that index, in that `part`, of that `date`, from that device.
 
-**Open and closed.** A writer appends to the bucket for its current local date, or to that date's highest split. Every earlier bucket of its own is **closed**: it never changes again. If the clock gives a date earlier than the writer's newest bucket, it keeps appending to the newest.
+**Open and closed.** A writer appends to the bucket for its current local date (its highest `part`). To start one it takes its lowest slot that holds no live record. Every other bucket of its own is **closed**: it doesn't change again, and waits to be archived. If the clock gives a date earlier than the writer's newest bucket, it keeps appending to the newest.
+
+**Splitting.** Before a bucket's JSON would pass 16 KiB (5.3), the day goes on in a new slot with the next `part`.
 
 **Pushing.** A writer saves each event on the device at once (section 6) and SHOULD push a bucket when a session ends or pauses, not after every event. Each push sends the whole bucket again, and tells the server that the person just studied (9).
 
 **Time.** A writer rounds an event's time down to the second, and feeds its own scheduler that stored value, not the clock reading it came from. Then a device that replays the log computes exactly what the device that wrote it did.
 
-**Splitting.** Before a bucket's JSON would pass 16 KiB (5.3), start `{deviceId}/{yyyy-mm-dd}/1`, then `/2`.
-
-**A copied device id.** Restoring a device from a backup, or moving a phone, can leave two installs with one device id, or one install with an old copy of its own bucket. Before appending, a writer MUST start from the version of the bucket that wins by section 3, and then append any events it holds that the winner lacks (matched by card key, `time` and `what`), after the winner's own. An install that receives a version of its bucket holding events it never wrote has been copied: it MUST mint a new device id for what it writes next.
+**A copied device id.** Restoring a device from a backup, or moving a phone, can leave two installs with one device id, or one install with an old copy of its own records. Before a writer appends to a bucket, the version that wins by section 3 MUST be the one it last wrote. If the winning version of any of its buckets or archive chunks is not, the id has been copied. The install then leaves those records as they are, mints a new device id, and writes under it whatever events it holds that the winners lack: those past the longest run of events its copy of a bucket and the winner begin with in common. Events written again this way sit in a new place, on purpose; none is counted twice, because the old place no longer holds them.
 
 #### Events and a card's state
 
@@ -381,7 +385,7 @@ Readers MUST skip an event whose `what` they don't know, MUST ignore columns the
 | `"drop"` | The person took it out of their deck |
 | `"reset"` | The person cleared its progress |
 
-**Replay.** To rebuild one card, take every event for its card key from every live bucket, from every device. Order them by `time`, then bucket `ref` (UTF-8 bytes), then index, and apply them in that order:
+**Replay.** To rebuild one card, take every event for its card key from every device, out of the live buckets and archive chunks ("Archive" says how each event is counted once). Order them by `time`, then device id (UTF-8 bytes), then the order that device wrote them (`date`, then `part`, then index). Apply them in that order:
 
 | State | Event | Next state |
 |---|---|---|
@@ -392,21 +396,71 @@ Readers MUST skip an event whose `what` they don't know, MUST ignore columns the
 | dropped | `add`, or a review | active |
 | any | `reset` | unchanged, and every earlier review of the card is discarded |
 
-Any other pairing leaves the state as it is. The reviews after the last `reset` feed the scheduler, in order. The **deck** is the cards that are active. A card that is dropped or suspended keeps its history.
+Any other pairing leaves the state as it is. The reviews after the last `reset` feed the scheduler, in order. A card that is dropped or suspended keeps its history.
 
-An app derives its own history-dependent state the same way, from the same events and its own columns.
+**Each card stands alone.** `JHN.3.16#text` and `JHN.3.16#ref` are two cards with two schedules: each is added, reviewed, suspended and reset by its own events.
+
+**State an app derives.** An app works out its own history-dependent state by the same replay: the same events, in the same order, read through its own columns, and starting again after the card's last `reset`. A ladder position that an app records as a column on a `text` card's reviews, for example, is rebuilt from the reviews since that reset and from nothing else, so it resets with the card and is never stored anywhere two devices both write.
+
+**The deck.** A passage card or an app's own card is in the deck when its state is active. A block's card (1.3) is in the deck when its block is live, the block's `card` names it, and its state is not suspended or dropped; one with no events yet is in the deck, as a new card. An app that sets a block's `card` SHOULD write `add` for its cards, and one that clears it SHOULD write `drop`, so the log agrees with the block; where they disagree, a block without `card` is out of the deck whatever the log says.
+
+**Removing a passage.** An app that removes a saved passage (1.6) SHOULD write `suspend` for each of that passage's cards that is active, and an app that saves it again SHOULD write `resume` for each that is suspended. The history is kept either way. An app that removes or saves a passage without `srs:write` leaves this to the apps that schedule: one that finds a deleted `passage` record newer than the last event of an active card of that passage SHOULD write the `suspend`, and one that finds a live record newer than such a card's `suspend` SHOULD write the `resume`. Saving a passage again is taken as wanting its cards back, including any the person had suspended by hand. Cards of a passage that was never saved have no `passage` record and are not touched by this.
+
+#### Archive (`srs-archive`)
+
+Day buckets are small to push and wasteful to keep: each one repeats its card keys, carries its own envelope and is padded to 256 bytes. So a device folds its closed buckets into its **archive**, which holds the same events in about a third of the room. The kind name `srs-archive` is final.
+
+```json
+{"kind":"srs-archive","ref":"q8Zr0aXv5Tg/2026/1","v":1,"updated":1793200000,"client":"proofs-web",
+ "base":0,
+ "cards":["JHN.3.16-18#text","x-proofs:q1-s1","JHN.3.16-18#ref"],
+ "cols":["x-proofs-rung","x-proofs-hints"],
+ "days":[
+   ["2026-11-09",-360,1792999000,[[0,0,"add"],[0,10,3],[0,390,2,"R2b",1],[1,600,1],[0,100,"reset"]]],
+   ["2026-11-10",-360,1793080000,[[2,0,"add"],[2,5,3],[0,55,4,"R3"]]]
+ ]}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ref` | string | `{deviceId}/{yyyy}/{n}`: chunk `n` (from 1) of that device's archive for the calendar year of the days it holds |
+| `v` | integer | Record schema version. Current writers use `1` |
+| `client` | string | Optional, as on a bucket |
+| `base` | integer | How many card keys the earlier chunks of this device and year hold between them |
+| `cards` | array | The card keys first met in this chunk. A device's card table for a year is every chunk's `cards`, in chunk order; an event's card index points into that table |
+| `cols` | array | Optional. Column names for this chunk's events |
+| `days` | array | One entry per day, oldest first: `[date, tz, t0, events]`. `date` and `tz` are the day's bucket's (`tz` is `null` if it had none). `t0` is a time in Unix seconds |
+
+An archived event is `[card, dt, what]` followed by its column values. Its time is `dt` seconds after the event before it in that day, and the first is `dt` seconds after `t0`. Everything else is as in a bucket.
+
+- **Folding.** Only the device that owns them folds buckets, and only closed ones. It folds whole days (every `part`, joined in order), oldest first, skipping none, into the next chunk of that year. A chunk stays under 16 KiB (5.3); a day too large for one goes on in the next, as a second entry with the same `date`. Folding MUST keep every event in its order, with its `what` and column values, known or not.
+- **Written once.** A chunk is never changed after it is written. More days go in a new chunk.
+- **Freeing the slots.** The writer sends the chunk and a deleted record (section 1) for each bucket it folded in one POST, so a server takes all of it or none (5.4). Those slots hold no live record, and are used again.
+- **Reading.** A reader takes events from every live chunk and every live bucket, and MUST leave out a bucket whose device and `date` a live chunk of that device already holds: it is a copy that came back, from an old backup or a device that was offline through the fold. A chunk whose `base` isn't the number of keys in the earlier chunks the reader holds can't be read yet, and is left out until they arrive.
+- **When.** A writer SHOULD fold once its closed buckets would fill a chunk, and MAY fold sooner. Near the library's limit it SHOULD fold everything closed.
 
 #### Budget
 
-A day's bucket is one item, and it costs what it holds. Measured with the encoding above: 50 reviews in a day, each of a different card, is about 1.8 KB of JSON, or 2,800 blob characters, so about 1,000,000 characters a year. Two short columns on every review add about a tenth. A library's minimum of 8,000,000 characters (5.5) holds everything a person keeps, so a log allowed half of it holds about four years at that pace, and three times that pace fills the same half in under a year and a half.
+These figures are measured from the encodings above, for one device and a deck of 500 passages (`test/review-log.test.ts` keeps them honest):
 
-Clients SHOULD show how full a library is, and MUST refuse to start a bucket that would pass the limit instead of dropping events or other records. This version defines no way to replace old events with a summary. The limits in 5.5 are minimums, and a server MAY give a library more room.
+| Pace | Day buckets, per day | Unfolded, per year | Archived, per year |
+|---|---|---|---|
+| 50 reviews a day, two units | 2,800 blob characters | 1,000,000 | 310,000 |
+| The same, with two short columns on half the reviews | 3,100 | 1,100,000 | 400,000 |
+| 150 reviews a day, three units | 8,100 | 3,000,000 | 880,000 |
+| The same, with two short columns on a third of the reviews | 8,600 | 3,200,000 | 1,070,000 |
+
+A library's minimum of 8,000,000 characters (5.5) holds everything a person keeps. Left unfolded, 150 reviews a day would fill all of it in about two and a half years. Archived, a log allowed half of it holds about four years at that pace and ten or more at 50 a day.
+
+Items stay few as well: a device holds its open day, the closed days waiting for a chunk (a week to a month of them), and 15 to 55 chunks for each year. Each install is its own device, so three installs used daily hold a few hundred items after a year where unfolded day buckets would be over a thousand.
+
+The archive makes the log last longer; it does not make it endless. Clients SHOULD show how full a library is, and MUST refuse to start a bucket that would pass the limit instead of dropping events or other records. The limits in 5.5 are minimums, and a server MAY give a library more room.
 
 #### Local scheduler cache (not synced)
 
 Clients keep FSRS (or other) card state on the device only, and rebuild it by replay. If two platforms need a comparable hash of scheduler parameters for tests, `paramsHash` is the lowercase hex SHA-256 of the parameter object as canonical JSON (RFC 8785).
 
-**Privacy and grants.** `srs-log` and `passage` records are encrypted like any other item (5.3, 9). Grant scope `read` covers them. Writing `srs-log` needs `srs:write` and writing `passage` needs `passages:write` (4.2). Sync-key holders write any kind.
+**Privacy and grants.** `srs-log`, `srs-archive` and `passage` records are encrypted like any other item (5.3, 9). Grant scope `read` covers them. Writing `srs-log` and `srs-archive` needs `srs:write` and writing `passage` needs `passages:write` (4.2). Sync-key holders write any kind.
 
 **Conformance.** Shared vectors (a fixed log, a pinned scheduler version and parameters, and the expected state) SHOULD back every implementation, so TypeScript and Swift clients replay to the same schedule.
 
@@ -460,7 +514,7 @@ The app sends the person to `https://<site>/connect?return=<url>&state=<random>&
 | `notes:write` | `POST /v1/lib/{lib}` | `mk` |
 | `srs:write` | `POST /v1/lib/{lib}` | `mk` |
 
-No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods only. **Any write scope** MUST mint `mk` in the `/connect` fragment so the app can form item ids (5.3). Consent copy MUST say that a write grant can change encrypted library items the server cannot filter by kind—not only the named intent—and that the app is trusted to honor the scope. By convention: `highlights:write` writes only `highlight` records; `passages:write` only `passage`; `notes:write` only `block` and legacy `note`; `srs:write` only `srs-log`. A connect request MAY ask for more than one write scope, and an app that saves a passage as it attaches a note or schedules a review asks for both.
+No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods only. **Any write scope** MUST mint `mk` in the `/connect` fragment so the app can form item ids (5.3). Consent copy MUST say that a write grant can change encrypted library items the server cannot filter by kind—not only the named intent—and that the app is trusted to honor the scope. By convention: `highlights:write` writes only `highlight` records; `passages:write` only `passage`; `notes:write` only `block` and legacy `note`; `srs:write` only `srs-log` and `srs-archive`. A connect request MAY ask for more than one write scope, and an app that saves a passage as it attaches a note or schedules a review asks for both.
 
 **Client fallback.** A site that does not yet know `passages:write`, `notes:write` or `srs:write` rejects the scope list at `/connect`. Apps SHOULD detect that and fall back (for example sync-key unlock for the person's own devices, or ask only for scopes the site advertises). [docs/reference-gaps.md](docs/reference-gaps.md) lists what the reference site and grant client don't do yet.
 
@@ -652,11 +706,21 @@ Deterministic block ids (1.3), `b_` + the first 22 characters of base64url(SHA-2
 | `margin-note:jhn.3.16` | `b_TDrZMPX9o3M850j5vPfZG0` |
 | `margin-block:jhn.3.16:b1` | `b_ov1VgqE09EJDjwm9KQOu9s` |
 
+A Margin note imported as blocks ([docs/notes-import.md](docs/notes-import.md)): slug `jhn.3.16`, created `2026-09-10T12:00:00.000Z`, updated `2026-09-12T08:30:15.500Z`, with blocks `b1` (indent 0), `b2` (indent 1) and `b3` (indent 0). Every record has `outline` `b_TDrZMPX9o3M850j5vPfZG0`, `created` 1789041600 and `updated` 1789201815:
+
+| Block | `ref` | `parent` | `rank` |
+|---|---|---|---|
+| root | `b_TDrZMPX9o3M850j5vPfZG0` | `null` | `a1` |
+| `b1` | `b_ov1VgqE09EJDjwm9KQOu9s` | the root | `a00000V` |
+| `b2` | `b_wLxJRZOCuQjgCHwR5d4pvi` | `b1`'s block | `a00000V` |
+| `b3` | `b_Go86-20CbazrT8zLOPGkJH` | the root | `a00001V` |
+
 ### 10.1 Conformance
 
 The `conformance/` folder checks an implementation against this spec. Passing it is necessary, not sufficient.
 
 - `bun run conformance <base-url>` checks a server's library routes (section 5.4): CORS and preflights, claiming, wrong tokens, the POST limits, paging, replacing by id, `epoch`, DELETE, the error body and `Cache-Control`. It uses a fresh random key and deletes its library at the end. It doesn't check slots, the 8,000,000-character library limit, or anything outside `/v1/lib`.
+- `conformance/fixtures.json` also holds fixtures for the experimental kinds: deterministic block ids, a Margin import, review-log replay (resets, ties between devices, the card state table, unknown events and columns, the archive) and folding buckets into archive chunks. `test/review-log.ts` is a small reference that passes them; it is test code, not a client.
 - `conformance/fixtures.json` is for clients: pairs of versions with the one that wins (section 3), the `updated` an edit gets, when a server answer means a refill (5.6), and sync scenarios (two devices converging, a tie, a deletion spreading, a refill after a new epoch, an old version repaired) to replay with your client against a test server.
 
 [docs/quickstart.md](docs/quickstart.md) walks through a first sync with the test-vector key.
@@ -665,7 +729,7 @@ The `conformance/` folder checks an implementation against this spec. Passing it
 
 This is version 1.3. Every 1.x version keeps these working the same way:
 
-- Records (section 1), the merge rule (3) and the writing rule for `updated`, except the **experimental** parts: `block` records (1.3), saved passages (1.6) and review history (1.7). Their fields and rules MAY change in a later 1.x without a 2.0 bump, until fixtures and a reference client stand behind them and a 1.x version drops the label. Their kind names (`block`, `passage`, `srs-log`) are final. Experimental does not mean optional encryption or a second merge rule: unaware clients still keep unknown kinds and fields (section 1) and apply section 3. Legacy `note` records are not experimental.
+- Records (section 1), the merge rule (3) and the writing rule for `updated`, except the **experimental** parts: `block` records (1.3), saved passages (1.6) and review history (1.7: `srs-log` and `srs-archive`). A later 1.x MAY change what writers produce for them without a 2.0 bump, until a reference client stands behind them and a 1.x version drops the label. What is already written stays readable: a change to a record's shape takes a new `v`, and readers MUST keep reading every `v` of `passage`, `block`, `srs-log` and `srs-archive` that a published version of this spec defined. Their kind names are final. Experimental does not mean optional encryption or a second merge rule: unaware clients still keep unknown kinds and fields (section 1) and apply section 3. Legacy `note` records are not experimental.
 - Library files and their header, `"hidden-word": 2` (2).
 - The sync key's text form (5.1), every HKDF info and length (5.2, 7.2), and how item ids, blobs, padding and slots are made (5.3, 7.2).
 - The `/v1` routes, their status codes and response shapes (5.4, 7.2), and the minimum limits (5.5). A server may accept more, never less.
@@ -685,7 +749,7 @@ Compatible (section 11): a 1.2 client or server is a 1.3 one for wire routes and
 
 - Saved passages (1.6): a `passage` record keyed by canonical reference, the core that everything else attaches to, with the rules any extension follows.
 - Outliner notes (1.3): `block` records (`outline`, `parent`, fractional `rank`, plain `text`, optional `passage` and `card`). Legacy `note` records keep working, with rules for a note and its migrated block. Margin import details in `docs/notes-import.md`.
-- Review history (1.7): single-writer `srs-log` buckets per device and day, events as compact arrays with per-app columns, and a card's place in the deck worked out from its events. Scheduler state stays on the device.
+- Review history (1.7): single-writer `srs-log` buckets per device and day, folded into a per-device yearly `srs-archive`; events as compact arrays with per-app columns; a card's place in the deck worked out from its events. Scheduler state stays on the device.
 - Grant scopes `passages:write`, `notes:write` and `srs:write` (4.2); any write scope mints `mk`; consent says the server can't filter by kind.
 - Highlights, colors and the library's name are unchanged.
 

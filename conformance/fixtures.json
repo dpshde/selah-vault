@@ -1,5 +1,5 @@
 {
- "about": "Client fixtures for SPEC.md 1.1. merge: of two JSON texts a and b of one record, which wins by section 3 (a, b or same). writes: the updated an edit gets (section 3, Writing). refill: whether a server answer means the server lost data (section 5.6, step 3). scenarios: steps for devices syncing through one server; replay them with your client against a test server. Every device uses the test-vector key; records are compared as JSON values, deleted ones included, in any order.",
+ "about": "Client fixtures for SPEC.md 1.1. merge: of two JSON texts a and b of one record, which wins by section 3 (a, b or same). writes: the updated an edit gets (section 3, Writing). refill: whether a server answer means the server lost data (section 5.6, step 3). scenarios: steps for devices syncing through one server; replay them with your client against a test server. Every device uses the test-vector key; records are compared as JSON values, deleted ones included, in any order. blockIds: deterministic block ids (1.3). marginImport: a Margin note and the block records every device makes of it (docs/notes-import.md). reviewLog.replay: a library's srs-log and srs-archive records, a card key, and the state and counted reviews [time, what, device, columns] that replay gives (1.7). reviewLog.fold: closed buckets, the device-year's earlier chunks, and the archive chunk they fold into (1.7).",
  "key": "000G-40R4-0M30-E209-185G-R38E-1YZ0",
  "merge": [
   {
@@ -733,5 +733,1356 @@
     }
    ]
   }
- ]
+ ],
+ "blockIds": [
+  {
+   "source": "legacy-note:JHN.3.16-18",
+   "ref": "b_RvrIbWBdj2CJjUQr0YSxAq"
+  },
+  {
+   "source": "margin-note:jhn.3.16",
+   "ref": "b_TDrZMPX9o3M850j5vPfZG0"
+  },
+  {
+   "source": "margin-block:jhn.3.16:b1",
+   "ref": "b_ov1VgqE09EJDjwm9KQOu9s"
+  }
+ ],
+ "marginImport": [
+  {
+   "name": "a note of three blocks, the second indented under the first",
+   "note": {
+    "slug": "jhn.3.16",
+    "passage": "JHN.3.16",
+    "created_at": "2026-09-10T12:00:00.000Z",
+    "updated_at": "2026-09-12T08:30:15.500Z",
+    "blocks": [
+     {
+      "id": "b1",
+      "text": "God so loved the world",
+      "indent": 0
+     },
+     {
+      "id": "b2",
+      "text": "loved: agapao",
+      "indent": 1
+     },
+     {
+      "id": "b3",
+      "text": "whoever believes",
+      "indent": 0
+     }
+    ]
+   },
+   "records": [
+    {
+     "kind": "block",
+     "ref": "b_TDrZMPX9o3M850j5vPfZG0",
+     "v": 1,
+     "updated": 1789201815,
+     "created": 1789041600,
+     "outline": "b_TDrZMPX9o3M850j5vPfZG0",
+     "parent": null,
+     "rank": "a1",
+     "text": "",
+     "passage": "JHN.3.16"
+    },
+    {
+     "kind": "block",
+     "ref": "b_ov1VgqE09EJDjwm9KQOu9s",
+     "v": 1,
+     "updated": 1789201815,
+     "created": 1789041600,
+     "outline": "b_TDrZMPX9o3M850j5vPfZG0",
+     "parent": "b_TDrZMPX9o3M850j5vPfZG0",
+     "rank": "a00000V",
+     "text": "God so loved the world",
+     "passage": "JHN.3.16"
+    },
+    {
+     "kind": "block",
+     "ref": "b_wLxJRZOCuQjgCHwR5d4pvi",
+     "v": 1,
+     "updated": 1789201815,
+     "created": 1789041600,
+     "outline": "b_TDrZMPX9o3M850j5vPfZG0",
+     "parent": "b_ov1VgqE09EJDjwm9KQOu9s",
+     "rank": "a00000V",
+     "text": "loved: agapao",
+     "passage": "JHN.3.16"
+    },
+    {
+     "kind": "block",
+     "ref": "b_Go86-20CbazrT8zLOPGkJH",
+     "v": 1,
+     "updated": 1789201815,
+     "created": 1789041600,
+     "outline": "b_TDrZMPX9o3M850j5vPfZG0",
+     "parent": "b_TDrZMPX9o3M850j5vPfZG0",
+     "rank": "a00001V",
+     "text": "whoever believes",
+     "passage": "JHN.3.16"
+    }
+   ]
+  }
+ ],
+ "reviewLog": {
+  "replay": [
+   {
+    "name": "a reset discards every earlier review, from any device",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        "add"
+       ],
+       [
+        0,
+        110,
+        3
+       ],
+       [
+        0,
+        400,
+        "reset"
+       ],
+       [
+        0,
+        500,
+        2
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "Zk3_devB-002/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        300,
+        4
+       ],
+       [
+        0,
+        450,
+        3
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      450,
+      3,
+      "Zk3_devB-002",
+      {}
+     ],
+     [
+      500,
+      2,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "the same second on two devices: the smaller device id goes first, so the reset discards its review",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        200,
+        "reset"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "Zk3_devB-002/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        200,
+        3
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": []
+   },
+   {
+    "name": "the same second on two devices, the other way round: the review comes after the reset and counts",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        200,
+        3
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "Zk3_devB-002/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        200,
+        "reset"
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      200,
+      3,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "a review with no add puts the card in the deck",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        3
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      100,
+      3,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "suspend then resume",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        "add"
+       ],
+       [
+        0,
+        200,
+        "suspend"
+       ],
+       [
+        0,
+        300,
+        "resume"
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": []
+   },
+   {
+    "name": "suspended on one device, reviewed later on another: active again",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        "add"
+       ],
+       [
+        0,
+        200,
+        "suspend"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "Zk3_devB-002/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-10",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        90000,
+        3
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      90000,
+      3,
+      "Zk3_devB-002",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "drop keeps the history; resume doesn't bring a dropped card back",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        3
+       ],
+       [
+        0,
+        200,
+        "drop"
+       ],
+       [
+        0,
+        300,
+        "resume"
+       ]
+      ]
+     }
+    ],
+    "state": "dropped",
+    "reviews": [
+     [
+      100,
+      3,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "an unknown event and an unknown column are skipped",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "cols": [
+       "x-proofs-rung",
+       "x-other-thing"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        3,
+        "R2b",
+        7
+       ],
+       [
+        0,
+        200,
+        "x-later"
+       ],
+       [
+        0,
+        300,
+        9
+       ],
+       [
+        0,
+        400,
+        2
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      100,
+      3,
+      "q8Zr0aXv5Tg",
+      {
+       "x-proofs-rung": "R2b",
+       "x-other-thing": 7
+      }
+     ],
+     [
+      400,
+      2,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "another card's events don't count",
+    "card": "JHN.3.16-18#ref",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text",
+       "JHN.3.16-18#ref"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        3
+       ],
+       [
+        1,
+        200,
+        4
+       ],
+       [
+        0,
+        300,
+        "reset"
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      200,
+      4,
+      "q8Zr0aXv5Tg",
+      {}
+     ]
+    ]
+   },
+   {
+    "name": "a day spread over two parts keeps its order",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/2",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "part": 1,
+      "events": [
+       [
+        0,
+        100,
+        "reset"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        100,
+        3
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": []
+   },
+   {
+    "name": "the archive alone replays like the buckets it folded",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-archive",
+      "ref": "q8Zr0aXv5Tg/2026/1",
+      "v": 1,
+      "updated": 1793200000,
+      "client": "proofs-web",
+      "base": 0,
+      "cards": [
+       "JHN.3.16-18#text",
+       "x-proofs:q1-s1",
+       "JHN.3.16-18#ref"
+      ],
+      "cols": [
+       "x-proofs-rung",
+       "x-proofs-hints"
+      ],
+      "days": [
+       [
+        "2026-11-09",
+        -360,
+        1792999000,
+        [
+         [
+          0,
+          0,
+          "add"
+         ],
+         [
+          0,
+          10,
+          3
+         ],
+         [
+          0,
+          390,
+          2,
+          "R2b",
+          1
+         ],
+         [
+          1,
+          600,
+          1
+         ],
+         [
+          0,
+          100,
+          "reset"
+         ]
+        ]
+       ],
+       [
+        "2026-11-10",
+        -360,
+        1793080000,
+        [
+         [
+          2,
+          0,
+          "add"
+         ],
+         [
+          2,
+          5,
+          3
+         ],
+         [
+          0,
+          55,
+          4,
+          "R3"
+         ]
+        ]
+       ]
+      ]
+     },
+     {
+      "kind": "srs-archive",
+      "ref": "q8Zr0aXv5Tg/2026/2",
+      "v": 1,
+      "updated": 1793300000,
+      "client": "proofs-web",
+      "base": 3,
+      "cards": [
+       "ROM.8.28#text"
+      ],
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "days": [
+       [
+        "2026-11-11",
+        -360,
+        1793170000,
+        [
+         [
+          0,
+          0,
+          3,
+          "R3"
+         ],
+         [
+          3,
+          30,
+          "add"
+         ],
+         [
+          3,
+          10,
+          1
+         ]
+        ]
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      1793080060,
+      4,
+      "q8Zr0aXv5Tg",
+      {
+       "x-proofs-rung": "R3"
+      }
+     ],
+     [
+      1793170000,
+      3,
+      "q8Zr0aXv5Tg",
+      {
+       "x-proofs-rung": "R3"
+      }
+     ]
+    ]
+   },
+   {
+    "name": "a folded bucket that is still live is not counted twice",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-archive",
+      "ref": "q8Zr0aXv5Tg/2026/1",
+      "v": 1,
+      "updated": 1793200000,
+      "client": "proofs-web",
+      "base": 0,
+      "cards": [
+       "JHN.3.16-18#text",
+       "x-proofs:q1-s1",
+       "JHN.3.16-18#ref"
+      ],
+      "cols": [
+       "x-proofs-rung",
+       "x-proofs-hints"
+      ],
+      "days": [
+       [
+        "2026-11-09",
+        -360,
+        1792999000,
+        [
+         [
+          0,
+          0,
+          "add"
+         ],
+         [
+          0,
+          10,
+          3
+         ],
+         [
+          0,
+          390,
+          2,
+          "R2b",
+          1
+         ],
+         [
+          1,
+          600,
+          1
+         ],
+         [
+          0,
+          100,
+          "reset"
+         ]
+        ]
+       ],
+       [
+        "2026-11-10",
+        -360,
+        1793080000,
+        [
+         [
+          2,
+          0,
+          "add"
+         ],
+         [
+          2,
+          5,
+          3
+         ],
+         [
+          0,
+          55,
+          4,
+          "R3"
+         ]
+        ]
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793000100,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text",
+       "x-proofs:q1-s1"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung",
+       "x-proofs-hints"
+      ],
+      "events": [
+       [
+        0,
+        1792999000,
+        "add"
+       ],
+       [
+        0,
+        1792999010,
+        3
+       ],
+       [
+        0,
+        1792999400,
+        2,
+        "R2b",
+        1
+       ],
+       [
+        1,
+        1793000000,
+        1
+       ],
+       [
+        0,
+        1793000100,
+        "reset"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/2",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-10",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#ref",
+       "JHN.3.16-18#text"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "events": [
+       [
+        0,
+        1793080000,
+        "add"
+       ],
+       [
+        0,
+        1793080005,
+        3
+       ],
+       [
+        1,
+        1793080060,
+        4,
+        "R3"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-11",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text",
+       "ROM.8.28#text"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "events": [
+       [
+        0,
+        1793170000,
+        3,
+        "R3"
+       ],
+       [
+        1,
+        1793170030,
+        "add"
+       ],
+       [
+        1,
+        1793170040,
+        1
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      1793080060,
+      4,
+      "q8Zr0aXv5Tg",
+      {
+       "x-proofs-rung": "R3"
+      }
+     ],
+     [
+      1793170000,
+      3,
+      "q8Zr0aXv5Tg",
+      {
+       "x-proofs-rung": "R3"
+      }
+     ]
+    ]
+   },
+   {
+    "name": "a chunk whose earlier chunk hasn't arrived is left out",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-archive",
+      "ref": "q8Zr0aXv5Tg/2026/2",
+      "v": 1,
+      "updated": 1793300000,
+      "client": "proofs-web",
+      "base": 3,
+      "cards": [
+       "ROM.8.28#text"
+      ],
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "days": [
+       [
+        "2026-11-11",
+        -360,
+        1793170000,
+        [
+         [
+          0,
+          0,
+          3,
+          "R3"
+         ],
+         [
+          3,
+          30,
+          "add"
+         ],
+         [
+          3,
+          10,
+          1
+         ]
+        ]
+       ]
+      ]
+     }
+    ],
+    "state": "absent",
+    "reviews": []
+   },
+   {
+    "name": "a deleted bucket holds nothing",
+    "card": "JHN.3.16-18#text",
+    "records": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "updated": 1793100001,
+      "deleted": true
+     },
+     {
+      "kind": "srs-log",
+      "ref": "Zk3_devB-002/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text"
+      ],
+      "events": [
+       [
+        0,
+        300,
+        4
+       ]
+      ]
+     }
+    ],
+    "state": "active",
+    "reviews": [
+     [
+      300,
+      4,
+      "Zk3_devB-002",
+      {}
+     ]
+    ]
+   }
+  ],
+  "fold": [
+   {
+    "name": "the first chunk of a device's year",
+    "buckets": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793000100,
+      "date": "2026-11-09",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text",
+       "x-proofs:q1-s1"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung",
+       "x-proofs-hints"
+      ],
+      "events": [
+       [
+        0,
+        1792999000,
+        "add"
+       ],
+       [
+        0,
+        1792999010,
+        3
+       ],
+       [
+        0,
+        1792999400,
+        2,
+        "R2b",
+        1
+       ],
+       [
+        1,
+        1793000000,
+        1
+       ],
+       [
+        0,
+        1793000100,
+        "reset"
+       ]
+      ]
+     },
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/2",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-10",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#ref",
+       "JHN.3.16-18#text"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "events": [
+       [
+        0,
+        1793080000,
+        "add"
+       ],
+       [
+        0,
+        1793080005,
+        3
+       ],
+       [
+        1,
+        1793080060,
+        4,
+        "R3"
+       ]
+      ]
+     }
+    ],
+    "earlier": [],
+    "updated": 1793200000,
+    "chunk": {
+     "kind": "srs-archive",
+     "ref": "q8Zr0aXv5Tg/2026/1",
+     "v": 1,
+     "updated": 1793200000,
+     "client": "proofs-web",
+     "base": 0,
+     "cards": [
+      "JHN.3.16-18#text",
+      "x-proofs:q1-s1",
+      "JHN.3.16-18#ref"
+     ],
+     "cols": [
+      "x-proofs-rung",
+      "x-proofs-hints"
+     ],
+     "days": [
+      [
+       "2026-11-09",
+       -360,
+       1792999000,
+       [
+        [
+         0,
+         0,
+         "add"
+        ],
+        [
+         0,
+         10,
+         3
+        ],
+        [
+         0,
+         390,
+         2,
+         "R2b",
+         1
+        ],
+        [
+         1,
+         600,
+         1
+        ],
+        [
+         0,
+         100,
+         "reset"
+        ]
+       ]
+      ],
+      [
+       "2026-11-10",
+       -360,
+       1793080000,
+       [
+        [
+         2,
+         0,
+         "add"
+        ],
+        [
+         2,
+         5,
+         3
+        ],
+        [
+         0,
+         55,
+         4,
+         "R3"
+        ]
+       ]
+      ]
+     ]
+    }
+   },
+   {
+    "name": "the next chunk carries on the year's card table",
+    "buckets": [
+     {
+      "kind": "srs-log",
+      "ref": "q8Zr0aXv5Tg/1",
+      "v": 1,
+      "updated": 1793100000,
+      "date": "2026-11-11",
+      "tz": -360,
+      "cards": [
+       "JHN.3.16-18#text",
+       "ROM.8.28#text"
+      ],
+      "client": "proofs-web",
+      "cols": [
+       "x-proofs-rung"
+      ],
+      "events": [
+       [
+        0,
+        1793170000,
+        3,
+        "R3"
+       ],
+       [
+        1,
+        1793170030,
+        "add"
+       ],
+       [
+        1,
+        1793170040,
+        1
+       ]
+      ]
+     }
+    ],
+    "earlier": [
+     {
+      "kind": "srs-archive",
+      "ref": "q8Zr0aXv5Tg/2026/1",
+      "v": 1,
+      "updated": 1793200000,
+      "client": "proofs-web",
+      "base": 0,
+      "cards": [
+       "JHN.3.16-18#text",
+       "x-proofs:q1-s1",
+       "JHN.3.16-18#ref"
+      ],
+      "cols": [
+       "x-proofs-rung",
+       "x-proofs-hints"
+      ],
+      "days": [
+       [
+        "2026-11-09",
+        -360,
+        1792999000,
+        [
+         [
+          0,
+          0,
+          "add"
+         ],
+         [
+          0,
+          10,
+          3
+         ],
+         [
+          0,
+          390,
+          2,
+          "R2b",
+          1
+         ],
+         [
+          1,
+          600,
+          1
+         ],
+         [
+          0,
+          100,
+          "reset"
+         ]
+        ]
+       ],
+       [
+        "2026-11-10",
+        -360,
+        1793080000,
+        [
+         [
+          2,
+          0,
+          "add"
+         ],
+         [
+          2,
+          5,
+          3
+         ],
+         [
+          0,
+          55,
+          4,
+          "R3"
+         ]
+        ]
+       ]
+      ]
+     }
+    ],
+    "updated": 1793300000,
+    "chunk": {
+     "kind": "srs-archive",
+     "ref": "q8Zr0aXv5Tg/2026/2",
+     "v": 1,
+     "updated": 1793300000,
+     "client": "proofs-web",
+     "base": 3,
+     "cards": [
+      "ROM.8.28#text"
+     ],
+     "cols": [
+      "x-proofs-rung"
+     ],
+     "days": [
+      [
+       "2026-11-11",
+       -360,
+       1793170000,
+       [
+        [
+         0,
+         0,
+         3,
+         "R3"
+        ],
+        [
+         3,
+         30,
+         "add"
+        ],
+        [
+         3,
+         10,
+         1
+        ]
+       ]
+      ]
+     ]
+    }
+   }
+  ]
+ }
 }
