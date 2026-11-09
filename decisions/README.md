@@ -6,7 +6,7 @@ To change a decision, write a new record and mark the old one `Superseded by …
 
 ## Shared selah.tools ADRs
 
-Cross-cutting architecture decisions for the selah.tools family (vault interop, E2E encryption, shared verse ranges, USFM refs, grab-bcv, route.bible links, deploy map, SRS progress, outliner notes) live in the **selah tools** Cursor Project Agent Store at `/cursor/stores/self/docs/adrs/INDEX.md`. That store copy is canonical. Add a shared ADR there when a decision affects more than one app (for example vault ↔ route.bible). Keep vault-only decisions in this folder. Readable GitHub mirrors of recent shared ADRs (0008 SRS, 0009 outliner blocks) live under [`docs/adr/`](../docs/adr/).
+Cross-cutting architecture decisions for the selah.tools family (vault interop, E2E encryption, shared verse ranges, USFM refs, grab-bcv, route.bible links, deploy map) live in the **selah tools** Cursor Project Agent Store at `/cursor/stores/self/docs/adrs/INDEX.md`. Add a shared ADR there when a decision affects more than one app (for example vault ↔ route.bible). A shared decision that changes SPEC.md also gets a full record in this folder, so anyone reviewing the spec on GitHub can read it; its Status line says it is shared. Keep vault-only decisions in this folder.
 
 | Decision | Status | Date |
 |---|---|---|
@@ -34,3 +34,6 @@ Cross-cutting architecture decisions for the selah.tools family (vault interop, 
 | [Style the app like route.bible](style-the-app-like-route-bible.md) | Accepted | 2026-11-03 |
 | [Rename the product to Selah Vault](rename-product-to-selah-vault.md) | Accepted | 2026-11-03 |
 | [One way to interoperate](one-way-to-interoperate.md) | Accepted | 2026-11-04 |
+| [Keep a record for each saved passage](keep-a-record-for-each-saved-passage.md) | Accepted | 2026-11-09 |
+| [Sync review history as an append-only log](sync-review-history-as-an-append-only-log.md) | Accepted | 2026-11-09 |
+| [Store notes as one record per block](store-notes-as-one-record-per-block.md) | Accepted | 2026-11-09 |
