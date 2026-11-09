@@ -6,7 +6,7 @@ To change a decision, write a new record and mark the old one `Superseded by …
 
 ## Shared selah.tools ADRs
 
-Cross-cutting architecture decisions for the selah.tools family (vault interop, E2E encryption, shared verse ranges, USFM refs, grab-bcv, route.bible links, deploy map) live in the **selah tools** Cursor Project Agent Store at `/cursor/stores/self/docs/adrs/INDEX.md`. Add a shared ADR there when a decision affects more than one app (for example vault ↔ route.bible). Keep vault-only decisions in this folder.
+Cross-cutting architecture decisions for the selah.tools family (vault interop, E2E encryption, shared verse ranges, USFM refs, grab-bcv, route.bible links, deploy map, SRS progress, outliner notes) live in the **selah tools** Cursor Project Agent Store at `/cursor/stores/self/docs/adrs/INDEX.md`. That store copy is canonical. Add a shared ADR there when a decision affects more than one app (for example vault ↔ route.bible). Keep vault-only decisions in this folder. Readable GitHub mirrors of recent shared ADRs (0008 SRS, 0009 outliner blocks) live under [`docs/adr/`](../docs/adr/).
 
 | Decision | Status | Date |
 |---|---|---|
