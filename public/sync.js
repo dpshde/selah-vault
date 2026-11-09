@@ -220,6 +220,18 @@ export function checkRecord(r) {
 }
 
 /**
+ * A well-formed record of a kind this client doesn't know (a later version's, such as `passage`,
+ * `block` or `srs-log`). It can't be checked or shown here, and MUST be kept (SPEC.md 1), so a
+ * file import carries it the same way a server does.
+ */
+export function isUnknownKind(r) {
+  if (!r || typeof r !== "object" || Array.isArray(r)) return false;
+  if (typeof r.kind !== "string" || typeof r.ref !== "string" || !r.kind || !r.ref) return false;
+  if (r.updated !== undefined && !Number.isSafeInteger(r.updated)) return false;
+  return !KINDS.includes(r.kind) && !r.kind.startsWith("x-");
+}
+
+/**
  * The merge rule: > 0 when version `a` beats `b`. The larger `updated` wins; on a tie, the JSON
  * text that sorts later as UTF-8 bytes. Every device, server and file compares the same way, so
  * they all keep the same version whatever order changes arrive in.
@@ -413,7 +425,7 @@ export class Library {
   async merge(records) {
     let changed = 0;
     for (const record of records) {
-      if (checkRecord(record)) continue;
+      if (checkRecord(record) && !isUnknownKind(record)) continue;
       const r = Number.isSafeInteger(record.updated) ? record : { ...record, updated: now() };
       if ((await this.offer(r, JSON.stringify(r), null)) === "newer") changed++;
     }
