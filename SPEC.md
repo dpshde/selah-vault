@@ -4,9 +4,9 @@
 
 Selah Vault (formerly Hidden Word) is a small format for Bible highlights and notes, kept in step across a person's devices by a server that can't read them.
 
-There is one way for another app to work with a library: **connect** (section 4). The person approves a grant on `/connect`, and the app reads and writes with it over HTTPS (highlights today; experimental spaced-repetition progress in 1.6).
+There is one way for another app to work with a library: **connect** (section 4). The person approves a grant on `/connect`, and the app reads and writes with it over HTTPS (highlights, outliner note blocks, and experimental spaced-repetition progress).
 
-1. **Records**: what a highlight, note, color, the library's name, or (experimental) SRS progress looks like as JSON.
+1. **Records**: what a highlight, outliner note block, color, the library's name, or (experimental) SRS progress looks like as JSON.
 2. **Backup files**: a library as one readable JSON Lines file, to save and restore.
 3. **Merging**: one rule that decides which version of a record wins, everywhere.
 4. **Connecting an app**: a grant, its scopes, and the highlights API.
@@ -23,8 +23,8 @@ A record is a JSON object. Every record has:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `highlight`, `note`, `color`, `library`, or an app's own kind starting with `x-` |
-| `ref` | string | What the record is about: a canonical reference (1.1), for `color` a color id, for `library` the setting's name |
+| `kind` | string | `highlight`, `block`, `note` (legacy), `color`, `library`, or an app's own kind starting with `x-` |
+| `ref` | string | What the record is about: a canonical reference (1.1), for `block` a block id (1.3), for `color` a color id, for `library` the setting's name |
 | `updated` | integer | When the record last changed, in Unix seconds (see section 3) |
 | `deleted` | `true` | Optional. The record was deleted |
 
@@ -82,13 +82,106 @@ Storage stays one record per verse; ranges are how apps write and show them. The
 - **Writing a range.** `ROM.5.3-5` in one color means a highlight record for each of `ROM.5.3`, `ROM.5.4` and `ROM.5.5`. A verse already highlighted whole in that color is left as it is, so writing the same range twice changes nothing. Any other verse takes the color as a one-verse edit does: one whole-verse part, keeping the earliest `created`, with `edited` set. A range is in one chapter and runs forwards; the reference client writes at most 100 verses at once (one POST, section 5.4) and sends them in one POST, so a server keeps all of them or none.
 - **Showing ranges.** Live single-verse highlights, in canonical order, join when they are back-to-back verses of one chapter and show the same color (the newest part's, unknown ids counting as `yellow`). A gap, a new chapter or a different color starts a new range. Each range lists its verses' refs, so an app can still recolor or delete one verse.
 
-### 1.3 Notes
+### 1.3 Notes (outliner blocks)
+
+A note is an **outline**: a tree of **blocks**. Each block is its own record, so two devices editing different bullets never clobber each other, a block can carry its own passage or highlight link, and a single bullet can opt into spaced repetition (1.6) without rewriting a whole document.
+
+This shape follows Margin Bible's outliner and RemNote-style flashcards, and Dotflowy's flat node list—without Dotflowy's `prevSiblingId` chains, which need atomic multi-node writes the vault merge rule (3) cannot guarantee.
+
+#### Block records
+
+```json
+{"kind":"block","ref":"b_01JEXAMPLE000000000001","v":1,"updated":1793000000,"created":1792000000,
+ "parent":null,"rank":"a0","text":"God so loved the world",
+ "passage":"JHN.3.16","highlight":"JHN.3.16","collapsed":false,
+ "card":{"id":"c_01JEXAMPLECARD000000001","type":"basic"},
+ "apps":{"margin":{"slug":"jhn.3.16","bookmarked":false}}}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ref` | string | Stable block id: `b_` plus 1–40 letters, digits, `_` or `-`. Identity for merge and item ids (5.3). Never reuse a deleted id for a different block |
+| `v` | integer | Record schema version. Readers keep unknown fields (section 1) |
+| `parent` | string or `null` | Parent block's `ref`, or `null` for a root |
+| `rank` | string | Fractional / lexicographic sort key among siblings (see Order) |
+| `text` | string | Plain Unicode text for this bullet (not a markdown document). Empty string is allowed |
+| `passage` | string | Optional. Canonical reference (1.1) this block is about. Roots of a passage outline SHOULD set it |
+| `highlight` | string | Optional. Soft link to a highlight's verse `ref` (1.2). The block MUST NOT depend on that highlight existing |
+| `collapsed` | boolean | Optional, default `false`. UI may hide children when true |
+| `created` | integer | Optional. When the block was first created (Unix seconds) |
+| `card` | object | Optional. SRS opt-in for this bullet (see Flashcards) |
+| `apps` | object | Optional. Namespaced per-app extras; other apps preserve them |
+
+**Body format.** Plain text per block, matching Margin's `Block.text`. Justification: outlines are trees of short lines, not documents; cloze markup is inline in `text`; unknown future fields (bold runs, embeds) are preserved via section 1. Apps MUST NOT require markdown parsing to show a block.
+
+**Anchoring.** A block is anchored by optional `passage` (verse, range, or chapter). It MAY also set `highlight` to the verse id of a highlight record. Losing or deleting the highlight does not delete the block.
+
+#### Order (fractional ranks)
+
+`rank` orders siblings under the same `parent`. It is 1–32 characters of `[0-9A-Za-z]`. Compare ranks as UTF-8 byte strings, ascending. When two live siblings share a rank, order by `ref` ascending.
+
+Writers mint a rank between neighbors (or after the last) so concurrent inserts under one parent rarely collide and never need to rewrite other blocks' pointers. Do **not** store sibling linked lists (`prevSiblingId`): those break under per-record LWW when two devices repoint the same follower.
+
+#### Building the tree
+
+Live blocks (not deleted) form a forest. Children of `P` are live blocks whose `parent` is `P`'s `ref`, ordered as above. A passage's outline is every live block reachable from roots with that `passage` (and orphans healed under that passage—see below). Apps that only care about one passage MAY ignore other roots.
+
+#### Merging blocks
+
+Section 3 still picks one version of each `kind`+`ref` by `updated` (then JSON size).
+
+- Edits to **different** blocks never conflict.
+- **Same block:** LWW on the whole record. Concurrent text edits can lose one side. An app that wants to keep both MAY write the losing text as a **conflict copy**: a new block (`ref` freshly minted) with the same `parent`, a `rank` beside the winner, and optional `apps.conflictOf` set to the original `ref`. Collapsed-only vs text-only races still LWW; prefer small, frequent writes.
+- **Moves / reparent:** changing `parent` and/or `rank` is an ordinary edit. Concurrent moves: LWW. After merge, if following `parent` links from a block returns to itself (a cycle), readers MUST treat that block's `parent` as `null` for display and SHOULD write a repair with `parent: null` (or the nearest live passage root) and a fresh `updated`.
+- **Orphans:** when a parent is deleted (tombstone), children stay live. Readers MUST still show them (for example under an "orphans" group for that passage, or reparented to the passage root). Clients SHOULD heal by setting `parent` to the nearest live ancestor or to `null` with the same `passage` as the old root. Do not cascade-delete children when a parent is tombstoned.
+- **Structural batches:** indent/outdent/move that touch several blocks SHOULD go in one POST when they fit (≤100 items, 5.4), so a server keeps all of them or none—but each block still merges on its own afterward.
+
+#### Flashcards (RemNote-style → SRS)
+
+A block opts into scheduling with `card`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable card id: `c_` plus 1–40 letters, digits, `_` or `-`. Assigned once when the card is created; **never** change it when `text` or children change |
+| `type` | string | `basic` or `cloze` |
+
+- **`basic`:** front is this block's `text`; back is the plain text of its direct live children (in order), or empty if none. Apps MAY also store an explicit back in an optional field later; keep unknown fields.
+- **`cloze`:** clozures are `{{cN::answer}}` or `{{cN::answer::hint}}` segments inside `text` (`N` is a positive integer). Each `cN` is one card face; the card id for SRS is still this `card.id` (one scheduler card per cloze block unless an app documents splitting by `N` under a derived id—default is one card, show one hole per review).
+
+Clearing `card` (or writing the block deleted) stops scheduling; existing `x-srs-log` / `x-srs-state` rows for that `card.id` remain until tombstoned. The review log (1.6) uses `card.id` as the card key.
+
+#### Size and library caps
+
+A block's JSON text SHOULD stay under 16 KiB (5.3). `text` SHOULD stay ≤ 4 KiB (about Margin's per-note comfort zone when split across bullets). Prefer splitting long writing into child blocks rather than one huge `text`.
+
+Each block is one library item. Servers SHOULD accept about 20,000 items and 8,000,000 blob characters (5.5). A 5,000-bullet outline already uses a quarter of that budget before highlights and SRS logs. Clients MUST tombstone blocks the person deletes, avoid leaving empty shells forever, and chunk imports into POSTs of ≤100. When near the cap, refuse new blocks rather than corrupt the library.
+
+#### Deletion
+
+Delete a block with a deleted record (section 1): `{"kind":"block","ref":"b_…","updated":…,"deleted":true}`. Same tombstone rules as highlights. Children are not auto-deleted (orphans above).
+
+#### Legacy `note` records
+
+1.2-era monolithic notes remain readable for the rest of 1.x:
 
 ```json
 {"kind":"note","ref":"JHN.3.16-18","updated":1793000000,"created":1792000000,"body":"Plain text."}
 ```
 
-`ref` may be a chapter, a verse, or a range. `body` is plain text. There is one note per reference.
+`ref` is a passage; `body` is plain text; one such record per passage. New writers SHOULD create `block` trees instead. On import, turn a legacy note into one root block (`passage` = old `ref`, `text` = `body`, fresh `b_…` id) and optionally tombstone the `note` after the blocks sync. Grant scope `notes:write` covers both `block` and legacy `note`.
+
+#### Margin Bible import mapping
+
+Margin's `margin.library-snapshot` v1 / MCP notes map as follows (OSIS → USFM refs as in 1.1):
+
+| Margin | Vault |
+|---|---|
+| One note (`osis`, `slug`, `kind`, …) | One root `block` with `passage` = USFM form of `osis`, `parent` = `null`, `rank` = `"a0"` (or spaced if several roots) |
+| Each `blocks[]` entry (`id`, `indent`, `text`, `bullet`) | One `block`; keep `ref` = Margin `id` when it matches `b_…`; build `parent` from the indent tree (previous shallower block), not from indent numbers alone; assign increasing `rank` among siblings |
+| `attachments`, `bookmarked`, `source`, `agent_*` | `apps.margin.*` on the root (or the block that carried them) |
+| Empty / bookmark-only notes | Root block with empty `text` and `apps.margin.bookmarked` as needed |
+
+Export the other way MAY rebuild Margin `blocks[]` by walking children depth-first and setting `indent` from depth. Overlapping Margin notes (verse vs range) stay separate roots—compose, don't absorb (Margin MCP rule).
 
 ### 1.4 Colors
 
@@ -132,20 +225,20 @@ Apps that schedule verse or passage reviews (Proofs and peers) MAY store progres
 
 **Source of truth.** An append-only **review log** is the history. FSRS (or any scheduler) state is a **derived cache** that a client may delete and rebuild by replaying the log. Highlight records (1.2) and the highlights API (4.3) are unchanged.
 
-**Card identity.** A card is a passage plus a unit, not a highlight id:
+**Card identity.** Prefer a stable id that survives text edits:
 
-- `passage`: a canonical reference (1.1), verse or range.
-- `unit`: a short token of lowercase letters, digits and `-` (examples: `verse`, `passage`, `ref-recall`).
+1. **Outliner flashcards (1.3):** the card key is the block's `card.id` (for example `c_01JEXAMPLECARD000000001`). Editing `text`, moving the block, or changing children MUST NOT change that id.
+2. **Passage-unit cards (no block):** `passage + "#" + unit` (for example `JHN.3.16#verse`), where `passage` is a canonical reference (1.1) and `unit` is a short token (`verse`, `passage`, `ref-recall`, …). Not a highlight id.
 
-The card key is `passage + "#" + unit` (for example `JHN.3.16#verse`, `ROM.5.3-5#passage`). Per-app settings that are not shared scheduling state (a Proofs rung, UI flags) live under `apps.<appId>` on the state record and MUST NOT affect card identity.
+Per-app settings that are not shared scheduling state (a Proofs rung, UI flags) live under `apps.<appId>` on the state record and MUST NOT affect card identity. Log and state `ref`s use the card key above.
 
 #### Review log buckets (`x-srs-log`)
 
 Each review is an immutable event. Events are stored in **month buckets** so a busy library stays under the item and size limits (5.3, 5.5):
 
 ```json
-{"kind":"x-srs-log","ref":"JHN.3.16#verse/2026-11","v":1,"updated":1793000000,
- "card":{"passage":"JHN.3.16","unit":"verse"},
+{"kind":"x-srs-log","ref":"c_01JEXAMPLECARD000000001/2026-11","v":1,"updated":1793000000,
+ "card":{"id":"c_01JEXAMPLECARD000000001","passage":"JHN.3.16","unit":"verse"},
  "events":[
    {"id":"01JBEXAMPLEevent0000000001","reviewedAt":1792999000,"rating":3,
     "unit":"verse","client":"proofs-web","device":"q8Zr0aXv5Tg","v":1}
@@ -156,7 +249,7 @@ Each review is an immutable event. Events are stored in **month buckets** so a b
 |---|---|---|
 | `ref` | string | `{card key}/{yyyy-mm}` in UTC, or `{card key}/cold` / `{card key}/cold-{n}` after compaction |
 | `v` | integer | Record schema version. Writers set it; readers keep unknown fields (section 1) |
-| `card` | object | `passage` and `unit` matching the card key |
+| `card` | object | Identifies the card: `id` when from a block flashcard; and/or `passage` + `unit` for passage-unit cards (and as optional metadata on block cards) |
 | `events` | array | Review events in this bucket |
 
 Each event:
@@ -182,7 +275,7 @@ Events are never edited in place. To undo history, see Reset below.
 #### Derived state (`x-srs-state`)
 
 ```json
-{"kind":"x-srs-state","ref":"JHN.3.16#verse","v":1,"updated":1793000000,
+{"kind":"x-srs-state","ref":"c_01JEXAMPLECARD000000001","v":1,"updated":1793000000,
  "algo":"fsrs-6","paramsHash":"sha256:3a1f…",
  "state":{"due":1793600000,"stability":2.5,"difficulty":5.2,"reps":4,"lapses":0},
  "apps":{"proofs":{"rung":2}}}
@@ -190,7 +283,7 @@ Events are never edited in place. To undo history, see Reset below.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `ref` | string | The card key (`passage#unit`) |
+| `ref` | string | The card key (`card.id` or `passage#unit`) |
 | `algo` | string | Scheduler id and version (`fsrs-6`, …) |
 | `paramsHash` | string | Hash of the parameter set used to produce `state` |
 | `state` | object | Scheduler fields. Shape follows `algo`; keep unknown keys |
@@ -250,9 +343,10 @@ The app sends the person to `https://<site>/connect?return=<url>&state=<random>&
 |---|---|---|
 | `read` | `GET /v1/lib/{lib}` | `ek` |
 | `highlights:write` | `POST /v1/lib/{lib}` | `mk` |
+| `notes:write` | `POST /v1/lib/{lib}` | `mk` |
 | `srs:write` | `POST /v1/lib/{lib}` | `mk` |
 
-No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods. Apps with `highlights:write` write only `highlight` records. Apps with `srs:write` write only experimental SRS kinds (`x-srs-log`, `x-srs-state`, and later first-class `srs-*` if promoted). A connect request MAY ask for more than one write scope; each still comes with `mk` when any write scope is granted.
+No grant can delete a library, touch passkey slots or make grants. The server can't see what a record is (9), so it enforces methods. Apps with `highlights:write` write only `highlight` records. Apps with `notes:write` write only `block` records and legacy `note` records (1.3). Apps with `srs:write` write only experimental SRS kinds (`x-srs-log`, `x-srs-state`, and later first-class `srs-*` if promoted). A connect request MAY ask for more than one write scope; each still comes with `mk` when any write scope is granted.
 
 ### 4.3 The highlights API
 
@@ -465,7 +559,9 @@ Not covered: the reference web app's screens and storage, and the reference Work
 
 Compatible (section 11): a 1.2 client or server is a 1.3 one.
 
-- Experimental spaced-repetition progress records (1.6): append-only `x-srs-log` buckets, derived `x-srs-state`, card keys from passage + unit, set-union merge of events, compaction and reset rules. Highlight records and the highlights API are unchanged.
+- Outliner notes (1.3): first-class `block` records (parent, fractional `rank`, plain `text`, optional `passage` / `highlight`, `collapsed`, schema `v`, RemNote-style `card` for SRS). Legacy `note`+`body` remains readable; new writers use blocks. Margin snapshot import mapping included. Highlight records and the highlights API are unchanged.
+- Grant scope `notes:write` for `block` and legacy `note` (4.2).
+- Experimental spaced-repetition progress records (1.6): append-only `x-srs-log` buckets, derived `x-srs-state`, card keys from block `card.id` or passage + unit, set-union merge of events, compaction and reset rules.
 - Grant scope `srs:write` for those kinds (4.2). The server still only distinguishes read vs POST; clients honor the write-kind rules.
 
 ## Changes from 1.1
