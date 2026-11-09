@@ -13,6 +13,11 @@ export const CLIENTS = {
     icon: "/apps/route-bible.svg",
     homepage: "https://vault-highlights-route-bible.dpshade.workers.dev",
   },
+  "https://proofs.dpshade.workers.dev": {
+    name: "Proofs",
+    icon: "/apps/proofs.svg",
+    homepage: "https://proofs.dpshade.workers.dev",
+  },
 };
 export const CLIENT_ORIGINS = Object.keys(CLIENTS);
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -71,4 +76,4 @@ export function consentLines(scopes) {
   const cant = scopes.includes("highlights:write") ? "Can't delete your library or change your passkeys" : "Can't change or delete anything";
   return [...can, { ok: false, icon: "lock", text: cant }, { ok: true, icon: "clock", text: `Access expires in ${GRANT_DAYS} days · disconnect anytime` }];
 }
-/* asset-rev 2 */
+/* asset-rev 3 */

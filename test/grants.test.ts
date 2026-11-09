@@ -94,6 +94,7 @@ describe("grants", () => {
 
   test("helpers", () => {
     expect(allowedClient("https://route.bible/john/3?x=1")).toBe("https://route.bible");
+    expect(allowedClient("https://proofs.dpshade.workers.dev/")).toBe("https://proofs.dpshade.workers.dev");
     expect(allowedClient("https://route.bible.evil.example/")).toBeNull();
     expect(allowedClient("https://u:p@route.bible/")).toBeNull();
     expect(allowedClient("http://localhost:4321/a")).toBe("http://localhost:4321");
@@ -106,6 +107,11 @@ describe("grants", () => {
     expect(grantAllows(["read", "highlights:write"], "DELETE")).toBe(false);
     expect(clientInfo("https://route.bible").name).toBe("route.bible");
     expect(clientInfo("https://vault-highlights-route-bible.dpshade.workers.dev").name).toBe("route.bible (preview)");
+    expect(clientInfo("https://proofs.dpshade.workers.dev")).toEqual({
+      name: "Proofs",
+      icon: "/apps/proofs.svg",
+      homepage: "https://proofs.dpshade.workers.dev",
+    });
     expect(clientInfo("http://localhost:5173").name).toBe("Local development");
     expect(consentLines(["read"]).map((l) => l.text)).toEqual(["View your highlights and notes", "Can't change or delete anything", "Access expires in 90 days · disconnect anytime"]);
     expect(consentLines(["highlights:write", "read"]).map((l) => l.text)[2]).toBe("Can't delete your library or change your passkeys");
