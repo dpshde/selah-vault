@@ -1,6 +1,6 @@
 // WebMCP: in-page tools a browser agent can call through `document.modelContext` while a library is
-// open on this page. They work on the unlocked library in this tab, through the same code as the
-// buttons, so changes sync like any other edit. No tool reads, returns or asks for the sync key.
+// open on this page. They work on the open library in this tab, through the same code as the
+// buttons, so changes sync like any other edit. No tool reads, returns or asks for tokens.
 // Feature-detected: browsers without WebMCP never see any of this. Design notes: docs/webmcp/.
 
 import { readPassage } from "./passage.js";
@@ -51,7 +51,7 @@ const LOCKED = () =>
   fail(
     "LIBRARY_LOCKED",
     "No library is open on this page.",
-    "Ask the user to unlock their library on this page with their passkey or sync key. Never ask them to share the key in chat.",
+    "Ask the user to sign in on this page with their passkey, email code, or Apple account. Never ask them to share credentials in chat.",
   );
 const clip = (text, max) => {
   const flat = String(text ?? "").replace(/\s+/g, " ").trim();

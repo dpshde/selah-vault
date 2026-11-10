@@ -1,79 +1,127 @@
-// Hands a library's sync key to another app: /unlock?app=Name&callback=scheme://path
-// The key goes back in the callback's fragment, which the browser never sends to a server.
-import { KeyError, Library, openSlot } from "./sync.js";
-import { getPasskeyPrf, passkeysAvailable, cancelled } from "./passkey.js";
+// /unlock: clean Selah Vault v2 sign-in (Passkey, Email 6-digit OTP, Sign in with Apple).
+import {
+  cancelled,
+  fetchSession,
+  loginWithPasskey,
+  passkeysAvailable,
+  registerPasskey,
+  sendEmailCode,
+  signInWithApple,
+  verifyEmailCode,
+} from "./passkey.js";
+import { setupThemeToggle } from "./theme-toggle.js";
 
 const $ = (sel) => document.querySelector(sel);
-const BLOCKED = new Set(["javascript:", "data:", "blob:", "file:", "about:", "vbscript:"]);
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+setupThemeToggle(document.querySelectorAll(".theme-toggle"));
 
-function checkCallback(raw) {
-  try {
-    const url = new URL(raw);
-    if (BLOCKED.has(url.protocol)) return null;
-    if (url.protocol === "http:" && !LOOPBACK.has(url.hostname)) return null;
-    return url;
-  } catch {
-    return null;
-  }
+function safeNext(raw) {
+  if (!raw || typeof raw !== "string") return "/";
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
 }
 
 const params = new URLSearchParams(location.search);
-const app = (params.get("app") ?? "").trim().slice(0, 60);
-const callback = checkCallback(params.get("callback"));
-let chosen = null;
+const nextPath = safeNext(params.get("next"));
+let pendingEmail = "";
 
-function show(id) {
-  for (const section of document.querySelectorAll("main > section")) section.hidden = section.id !== id;
+function setError(msg = "") {
+  const el = $("#auth-error");
+  if (el) el.textContent = msg;
 }
 
-function ask(key, name) {
-  chosen = { key, name };
-  $("#consent-lib").textContent = name;
-  $("#consent-dest").textContent = /^https?:$/.test(callback.protocol) ? callback.host : `${callback.protocol}//${callback.host}`;
-  show("consent");
+function completeSignIn() {
+  location.replace(nextPath);
 }
 
-function finish(fragment) {
-  const url = new URL(callback);
-  url.hash = new URLSearchParams(fragment).toString();
-  location.assign(url.href);
+if (!passkeysAvailable()) {
+  $("#passkey-login").hidden = true;
+  $("#passkey-register-wrap").hidden = true;
 }
 
-if (!app || !callback) {
-  show("bad");
-} else {
-  document.querySelectorAll(".app-name").forEach((el) => (el.textContent = app));
-  const session = JSON.parse(localStorage.getItem("hidden-word:session") ?? "null");
-  if (session) {
-    $("#use-session").hidden = false;
-    $("#use-session").textContent = `Use “${session.name}” (unlocked in this browser)`;
-    $("#use-session").addEventListener("click", () => ask(session.key, session.name));
+$("#passkey-login")?.addEventListener("click", async () => {
+  setError("");
+  try {
+    await loginWithPasskey();
+    completeSignIn();
+  } catch (error) {
+    if (!cancelled(error)) setError(error.message);
   }
-  if (passkeysAvailable()) $("#passkey-unlock").hidden = false;
-  show("pick");
-}
+});
 
-$("#unlock-form").addEventListener("submit", async (e) => {
+$("#passkey-register")?.addEventListener("click", async () => {
+  setError("");
+  try {
+    await registerPasskey({ name: "Personal" });
+    completeSignIn();
+  } catch (error) {
+    if (!cancelled(error)) setError(error.message);
+  }
+});
+
+$("#email-send-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const form = new FormData(e.target);
+  setError("");
+  const email = String(new FormData(e.target).get("email") ?? "").trim();
+  if (!email) return;
   try {
-    const library = await Library.open({ keyText: form.get("password") });
-    ask(library.keyText, form.get("username").trim() || "Personal");
+    await sendEmailCode(email);
+    pendingEmail = email;
+    $("#email-sent-note").textContent = `Enter the 6-digit code sent to ${email}.`;
+    $("#email-send-form").hidden = true;
+    $("#email-verify-form").hidden = false;
+    $("#otp-input")?.focus();
   } catch (error) {
-    e.target.querySelector(".error").textContent = error instanceof KeyError ? "That sync key has a typo." : error.message;
+    setError(error.message);
   }
 });
 
-$("#passkey-unlock").addEventListener("click", async () => {
+$("#email-back")?.addEventListener("click", () => {
+  setError("");
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  $("#email-input")?.focus();
+});
+
+$("#email-verify-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setError("");
+  const code = String(new FormData(e.target).get("code") ?? "").trim();
   try {
-    const slot = await openSlot({ prf: await getPasskeyPrf() });
-    if (slot) ask(slot.key, slot.name);
-    else $("#unlock-form .error").textContent = "That passkey isn't linked to a library yet.";
+    await verifyEmailCode(pendingEmail, code);
+    completeSignIn();
   } catch (error) {
-    if (!cancelled(error)) $("#unlock-form .error").textContent = error.message;
+    setError(error.message);
   }
 });
 
-$("#allow").addEventListener("click", () => finish({ k: chosen.key, name: chosen.name }));
-$("#deny").addEventListener("click", () => finish({ error: "denied" }));
+$("#apple-login")?.addEventListener("click", async () => {
+  setError("");
+  try {
+    if (globalThis.AppleID?.auth) {
+      const resp = await globalThis.AppleID.auth.signIn();
+      const idToken = resp?.authorization?.id_token;
+      if (!idToken) throw new Error("Apple did not return an identity token.");
+      const fullName = [resp?.user?.name?.firstName, resp?.user?.name?.lastName].filter(Boolean).join(" ").trim();
+      await signInWithApple(idToken, { name: fullName || undefined });
+      completeSignIn();
+      return;
+    }
+    const res = await fetch("/config.json", { cache: "no-store" }).catch(() => null);
+    const cfg = res?.ok ? await res.json().catch(() => ({})) : {};
+    if (!cfg?.appleClientId) throw new Error("Sign in with Apple isn't configured on this server yet. Use a passkey or email.");
+    const url = new URL("https://appleid.apple.com/auth/authorize");
+    url.searchParams.set("client_id", cfg.appleClientId);
+    url.searchParams.set("redirect_uri", `${location.origin}/auth/apple`);
+    url.searchParams.set("response_type", "code id_token");
+    url.searchParams.set("response_mode", "form_post");
+    url.searchParams.set("scope", "name email");
+    url.searchParams.set("state", nextPath);
+    location.assign(url.href);
+  } catch (error) {
+    if (!cancelled(error)) setError(error.message);
+  }
+});
+
+fetchSession().then((user) => {
+  if (user) completeSignIn();
+});

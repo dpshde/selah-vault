@@ -8,28 +8,18 @@ Accepted
 
 ## Context
 
-A highlight across several verses is one record per verse (SPEC 1.2), and every app sending a range sent N records and merged them back into ranges for its list. The ask was a range-friendly API: a range on write, expanded into verses all or none, and an opt-in grouped read, without giving up per-verse storage.
-
-The obvious place was the server's routes (`POST` a range, `GET ?group=ranges`). But the server stores only encrypted blobs under HMAC'd ids (SPEC 5.3, 9): it can't see a record's kind, ref or color, so it can't expand or merge anything. Grants carry `ek`/`mk` so the app, not the server, can decrypt and write.
+People think in passage ranges ("highlight Romans 5:3-5 in green"), yet storing multi-verse ranges as single rows creates overlapping or half-deleted ranges when someone later unhighlights or recolors verse 4 on another device. Conversely, storing one highlight per verse keeps concurrent verse edits conflict-free, provided clients expand ranges on write and group contiguous same-color verses on read.
 
 ## Decision
 
-Ranges live in the shared client code, where the plaintext is:
+Keep storage strictly one verse per `highlight.set` / `highlight.removed` event (`SPEC.md` section 3.3), and implement range expansion and grouping once in shared client modules:
 
-- `public/ranges.js` defines both directions once: `expandRange`/`rangeWrites` (a canonical same-chapter range, at most 100 verses, into the records to save; verses already that color are skipped, so it's idempotent) and `listRanges` (the grouping the list shows). `test/ranges-vectors.json` covers both, for route.bible too.
-- `public/sync.js` adds `Library.highlightRange(ref, color)` and `Library.highlights({ group: "ranges" })`. The default read is unchanged.
-- One edit's records reach the server in one POST when they fit (`batches`, putMany groups), and a POST is one D1 batch, so a range is all or none on the server as well as on the device.
-- The remote MCP server (`/mcp`), which opens a library with its sync key, uses the same code: `add_highlight` takes ranges, `list_highlights`/`find_highlights` group by default and take `group: "verses"`.
-
-The `/v1` routes are unchanged. No migration.
+- `public/ranges.js` defines `expandRange` and `rangeWrites` (expanding a canonical same-chapter range of up to 100 verses into per-verse writes while skipping verses already in that color) and `listRanges` (grouping contiguous same-color verses within a chapter). `test/ranges-vectors.json` verifies identical behavior across Selah Vault and `route.bible`.
+- `public/sync.js` exposes `Library.highlightRange(ref, color)` and `Library.highlights({ group: "ranges" })`, sending up to 500 per-verse events atomically in a single `POST /v2/events` transaction.
+- `public/grant-client.js` exposes `changes(since)` (hydrating from `GET /v2/bootstrap` when `since === null` and pulling `GET /v2/events?after=<seq>` thereafter) alongside `highlightRange` and grouped reads for OAuth 2.1 clients.
+- The `/mcp` server (`src/mcp/index.ts`) imports `public/ranges.js` directly so `add_highlight`, `list_highlights`, and `find_highlights` expand and group ranges with the exact same rules.
 
 ## Consequences
 
-- The server stays unable to read libraries, and storage stays one record per verse: no overlapping or half-deleted ranges.
-- Clients that import `ranges.js` (or `sync.js`) get ranges without merge code of their own; others follow SPEC 1.2 and the vectors.
-- Grant scopes need nothing new: a range write is a POST (`highlights:write`), a grouped read is a GET (`read`) plus local grouping.
-- A range over 100 verses (all of Psalm 119) is two writes, so it isn't atomic as a whole.
-
-## Update 2026-11-04: a changes feed for grant clients
-
-Grants are the way apps work with a vault. `public/grant-client.js` gives them `changes(since)`: upserts and deletions since an opaque cursor (the server's `epoch` and `seq`), plus the next cursor, with the merge rule and tombstones handled in the client. For the same reason as above, it isn't a server route: the server can't tell an upsert from a deletion. It reads with `GET ?after=` (scope `read`) and writes one POST per range (`highlights:write`). Documented in [docs/connect.md](../docs/connect.md).
+- Recoloring or deleting a single verse inside a highlighted passage splits or trims the range cleanly across all devices with zero overlapping-range edge cases.
+- Web, OAuth apps (`route.bible`, `Proofs`), and `/mcp` share one tested range implementation and test-vector suite.

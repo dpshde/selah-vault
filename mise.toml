@@ -1,7 +1,7 @@
 [tools]
 bun = "1.4.2"
 node = "22.23.3"
-# Pin the beta. An unpinned `cf` install resolves to an unrelated 0.x package.
+# Pin the beta; an unpinned `cf` install resolves to an unrelated 0.x package.
 "npm:cf" = "1.0.0-beta.12"
 
 [env]
@@ -9,11 +9,53 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 CF_SEND_TELEMETRY = "false"
 
 [tasks.install]
-run = "mise exec -- bun install"
+description = "Install pinned dependencies with Bun"
+run = "bun install --frozen-lockfile"
+
+[tasks."db:migrate:local"]
+description = "Apply D1 auth migrations to local .wrangler/state"
+run = "sh scripts/d1-local.sh"
+
+[tasks."db:migrate:prod"]
+description = "Apply D1 auth migrations to production selah-vault-auth"
+run = "cf d1 migrations apply selah-vault-auth --remote --dir migrations"
 
 [tasks.dev]
-description = "Local server with D1 at http://localhost:8787"
-run = ["mise exec -- bun run migrate:local", "mise exec -- cf dev"]
+description = "Start local Worker + D1 + Durable Objects at http://localhost:8787"
+run = ["mise run db:migrate:local", "cf dev"]
+
+[tasks.typecheck]
+description = "Typecheck Worker TypeScript with both tsrs and tsc"
+run = ["tsrs --noEmit -p tsconfig.json", "tsc --noEmit"]
+
+[tasks.test]
+description = "Run the Bun test suite"
+run = "bun test"
+
+[tasks.dry-run]
+description = "Bundle and validate selah-vault Worker + Static Assets"
+run = "cf deploy --dry-run"
+
+[tasks."jev:dry-run"]
+description = "Bundle and validate workers/selah-jev Worker"
+run = "wrangler deploy -c workers/selah-jev/wrangler.toml --dry-run --outdir .cloudflare/jev-dry-run"
+
+[tasks.hygiene]
+description = "Verify repository naming, OAuth SVG icons, JSON schemas, and ADR index"
+run = "bun scripts/verify-repo.ts"
 
 [tasks.check]
-run = ["mise exec -- bun run check", "mise exec -- bun test"]
+description = "Run all quality gates (hygiene, typecheck, test, dry-runs)"
+run = ["mise run hygiene", "mise run typecheck", "mise run test", "mise run dry-run", "mise run jev:dry-run"]
+
+[tasks.vendor]
+description = "Bundle grab-bcv and scripture-inline into public/vendor/"
+run = "bun scripts/vendor.js"
+
+[tasks.verify]
+description = "Verify deployed assets and headers against https://vault.selah.tools"
+run = "bun scripts/verify-assets.ts https://vault.selah.tools"
+
+[tasks.deploy]
+description = "Run checks, migrate D1, deploy Worker, and verify live assets"
+run = ["mise run check", "mise run db:migrate:prod", "cf deploy", "mise run verify"]

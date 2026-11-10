@@ -1,30 +1,14 @@
-// Selah Vault reference client (spec v1.2). Needs only WebCrypto and fetch, so it runs in browsers,
-// Bun, Node 20+, Deno and Workers.
-import { compareRefs, splitRef } from "./refs.js";
-
-const te = new TextEncoder();
-const td = new TextDecoder();
-const subtle = globalThis.crypto.subtle;
-
-import { COLORS, listRanges, rangeView, rangeWrites, stamp, topColor } from "./ranges.js";
+// Selah Vault v2 client SDK: local-first event outbox, deterministic (ts, id) projector,
+// /v2/bootstrap hydration, incremental /v2/events sync, live /v2/ws pokes, and .jsonl backups.
+import { compareRefs, expandVerses, splitRef } from "./refs.js";
+import { COLORS, listRanges, rangeView, rangeWrites, topColor } from "./ranges.js";
 
 export { COLORS, topColor };
-export const KINDS = ["highlight", "note", "color", "library"];
-/** The ref of the `library` record that holds the library's name (spec section 1.5). */
-export const NAME_REF = "name";
 const COLOR_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const HEX = /^#[0-9a-fA-F]{6}$/;
-const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const PAD = 256;
-const BATCH = 100;
 const FORMAT = 2;
+const EVENT_BATCH = 500;
 const TIMEOUT_MS = 20_000;
-
-export class KeyError extends Error {
-  constructor() {
-    super("That sync key has a typo.");
-  }
-}
 
 export class SyncError extends Error {
   constructor(status, body) {
@@ -33,11 +17,9 @@ export class SyncError extends Error {
   }
 }
 
-// ---- bytes and primitives
-
 export const now = () => Math.floor(Date.now() / 1000);
+export const nowMs = () => Date.now();
 export const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
-export const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
 export function b64url(bytes) {
   let s = "";
@@ -46,244 +28,335 @@ export function b64url(bytes) {
 }
 
 export function fromB64url(text) {
-  const s = text.replace(/-/g, "+").replace(/_/g, "/");
+  const s = String(text ?? "").replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(s + "=".repeat((4 - (s.length % 4)) % 4));
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
-const sha256 = async (bytes) => new Uint8Array(await subtle.digest("SHA-256", bytes));
+export const newEventId = () => `ev_${b64url(randomBytes(16))}`;
 
-async function hkdf(ikm, info, length) {
-  const key = await subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
-  const bits = await subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: te.encode(info) },
-    key,
-    length * 8,
-  );
-  return new Uint8Array(bits);
+/** Deterministic (ts, id) ordering so offline multi-device events converge regardless of arrival order. */
+export function compareEventOrder(a, b) {
+  const dt = (Number(a?.ts) || 0) - (Number(b?.ts) || 0);
+  if (dt !== 0) return dt;
+  const x = String(a?.id ?? "");
+  const y = String(b?.id ?? "");
+  return x < y ? -1 : x > y ? 1 : 0;
 }
 
-const aesKey = (raw) => subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
-
-/** base64url(nonce ‖ AES-256-GCM(plaintext)), with `aad` bound as associated data. */
-async function seal(key, aad, plaintext, nonce = randomBytes(12)) {
-  const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: te.encode(aad) }, key, plaintext));
-  const out = new Uint8Array(12 + ct.length);
-  out.set(nonce);
-  out.set(ct, 12);
-  return b64url(out);
-}
-
-async function unseal(key, aad, blob) {
-  const b = fromB64url(blob);
-  const pt = await subtle.decrypt({ name: "AES-GCM", iv: b.subarray(0, 12), additionalData: te.encode(aad) }, key, b.subarray(12));
-  return new Uint8Array(pt);
-}
-
-function base32(bytes) {
-  let out = "";
-  let value = 0;
-  let bits = 0;
-  for (const b of bytes) {
-    value = (value << 8) | b;
-    bits += 8;
-    while (bits >= 5) {
-      out += B32[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-    value &= (1 << bits) - 1;
+export function autoTags(kind, ref, data) {
+  const set = new Set();
+  if (typeof ref === "string") {
+    const code = splitRef(ref)?.code;
+    if (code) set.add(`book:${code}`);
   }
-  if (bits > 0) out += B32[(value << (5 - bits)) & 31];
-  return out;
-}
-
-function unbase32(text) {
-  const bytes = [];
-  let value = 0;
-  let bits = 0;
-  for (const ch of text) {
-    value = (value << 5) | B32.indexOf(ch);
-    bits += 5;
-    if (bits >= 8) {
-      bytes.push((value >>> (bits - 8)) & 255);
-      bits -= 8;
-    }
-    value &= (1 << bits) - 1;
+  if (data && typeof data.cardKey === "string" && data.cardKey) {
+    set.add(`card:${data.cardKey}`);
   }
-  return { bytes: Uint8Array.from(bytes), rest: value };
+  return [...set];
 }
 
-// ---- the sync key
-
-export const newKey = () => randomBytes(16);
-
-/** 16 key bytes + 1 check byte (SHA-256(key)[0]) → 28 Crockford base32 chars in groups of 4. */
-export async function formatKey(key) {
-  const check = (await sha256(key))[0];
-  return base32(Uint8Array.of(...key, check)).match(/.{4}/g).join("-");
-}
-
-/** Accepts any case, spaces or dashes, and O/I/L for 0/1. Throws KeyError on a typo. */
-export async function parseKey(text) {
-  const s = String(text).toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
-  if (!/^[0-9A-HJKMNP-TV-Z]{28}$/.test(s)) throw new KeyError();
-  const { bytes, rest } = unbase32(s);
-  const key = bytes.slice(0, 16);
-  if (rest !== 0 || bytes.length !== 17 || (await sha256(key))[0] !== bytes[16]) throw new KeyError();
-  return key;
-}
-
-export async function deriveKeys(key) {
-  const [lib, auth, enc, mac] = await Promise.all([
-    hkdf(key, "hidden-word/v1/lib", 16),
-    hkdf(key, "hidden-word/v1/auth", 32),
-    hkdf(key, "hidden-word/v1/enc", 32),
-    hkdf(key, "hidden-word/v1/mac", 32),
-  ]);
-  return {
-    lib: hex(lib),
-    auth: b64url(auth),
-    enc: await aesKey(enc),
-    mac: await subtle.importKey("raw", mac, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
-  };
-}
-
-/** The library id, its raw decryption key and item-id key (hex): what a grant's app needs to read, and to write records. */
-export async function readKeys(key) {
-  return {
-    lib: hex(await hkdf(key, "hidden-word/v1/lib", 16)),
-    enc: hex(await hkdf(key, "hidden-word/v1/enc", 32)),
-    mac: hex(await hkdf(key, "hidden-word/v1/mac", 32)),
-  };
-}
-
-export async function itemId(keys, kind, ref) {
-  const mac = new Uint8Array(await subtle.sign("HMAC", keys.mac, te.encode(`${kind} ${ref}`)));
-  return b64url(mac).slice(0, 22);
-}
-
-/** UTF-8 JSON padded with spaces to a multiple of 256 bytes, so sizes don't reveal note length. */
-export function pad(json) {
-  const bytes = te.encode(json);
-  const out = new Uint8Array(Math.max(PAD, Math.ceil(bytes.length / PAD) * PAD)).fill(0x20);
-  out.set(bytes);
-  return out;
-}
-
-export async function encryptRecord(keys, record, nonce) {
-  const id = await itemId(keys, record.kind, record.ref);
-  return { id, blob: await seal(keys.enc, id, pad(JSON.stringify(record)), nonce) };
-}
-
-/** The record's JSON text as its writer encrypted it, without the padding. */
-export async function decryptText(keys, id, blob) {
-  return td.decode(await unseal(keys.enc, id, blob)).replace(/ +$/, "");
-}
-
-export async function decryptRecord(keys, id, blob) {
-  return JSON.parse(await decryptText(keys, id, blob));
-}
-
-// ---- records
-
-/** Null when the record is valid, else what's wrong. Unknown fields are always allowed. */
-export function checkRecord(r) {
-  if (!r || typeof r !== "object" || Array.isArray(r)) return "a record is a JSON object";
-  if (typeof r.kind !== "string" || typeof r.ref !== "string") return "kind and ref are required";
-  if (r.updated !== undefined && !Number.isSafeInteger(r.updated)) return "updated is a whole number of seconds";
-  if (r.kind.startsWith("x-")) return null;
-  if (!KINDS.includes(r.kind)) return `unknown kind ${r.kind}`;
-  if (r.kind === "library") {
-    if (r.ref !== NAME_REF) return `not a library setting: ${r.ref}`;
-    if (r.deleted === true) return null;
-    if (typeof r.name !== "string" || !r.name.trim()) return "a library's name is text";
-    return null;
+export function palette(colorItems = []) {
+  const byId = new Map();
+  for (const item of colorItems) {
+    if (!item || item.deleted) continue;
+    const id = item.id ?? item.ref;
+    if (id) byId.set(id, item);
   }
-  if (r.kind === "color") {
-    if (!COLOR_ID.test(r.ref)) return `not a color id: ${r.ref}`;
-    if (r.deleted === true) return null;
-    if (r.hex !== undefined && !HEX.test(r.hex)) return "hex looks like #RRGGBB";
-    if (r.hex === undefined && !COLORS.includes(r.ref)) return "a new color needs a hex";
-    if (r.name !== undefined && typeof r.name !== "string") return "a color's name is text";
-    return null;
-  }
-  const ref = splitRef(r.ref);
-  if (!ref) return `not a canonical ref: ${r.ref}`;
-  if (r.deleted === true) return null;
-  if (r.kind === "highlight") {
-    if (ref.verse === null || ref.end !== null) return "a highlight's ref is one verse";
-    if (!Array.isArray(r.highlights) || !r.highlights.length) return "highlights must be a non-empty list";
-    if (r.highlights.some((h) => !h || typeof h.color !== "string")) return "every highlight needs a color";
-  }
-  if (r.kind === "note" && typeof r.body !== "string") return "a note needs a body";
-  return null;
-}
-
-/**
- * The merge rule: > 0 when version `a` beats `b`. The larger `updated` wins; on a tie, the JSON
- * text that sorts later as UTF-8 bytes. Every device, server and file compares the same way, so
- * they all keep the same version whatever order changes arrive in.
- */
-export function compareVersions(a, b) {
-  const d = (Number.isSafeInteger(a.updated) ? a.updated : 0) - (Number.isSafeInteger(b.updated) ? b.updated : 0);
-  if (d) return d;
-  const x = te.encode(a.text);
-  const y = te.encode(b.text);
-  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i];
-  return x.length - y.length;
-}
-
-/** The library's colors: the six built in (named, when the library names them), then its own. */
-export function palette(colorRecords) {
-  const byId = new Map(colorRecords.filter((r) => r.kind === "color" && !r.deleted).map((r) => [r.ref, r]));
   const builtIn = COLORS.map((id) => ({ id, name: byId.get(id)?.name ?? "", hex: null, builtIn: true }));
   const own = [...byId.values()]
-    .filter((r) => !COLORS.includes(r.ref) && HEX.test(r.hex ?? ""))
-    .sort((a, b) => (a.created ?? 0) - (b.created ?? 0) || a.ref.localeCompare(b.ref))
-    .map((r) => ({ id: r.ref, name: r.name ?? "", hex: r.hex.toLowerCase(), builtIn: false }));
+    .filter((c) => {
+      const id = c.id ?? c.ref;
+      return !COLORS.includes(id) && HEX.test(c.hex ?? "");
+    })
+    .sort((a, b) => (a.createdTs ?? (a.created ?? 0) * 1000) - (b.createdTs ?? (b.created ?? 0) * 1000) || String(a.id ?? a.ref).localeCompare(String(b.id ?? b.ref)))
+    .map((c) => ({ id: c.id ?? c.ref, name: c.name ?? "", hex: c.hex.toLowerCase(), builtIn: false }));
   return [...builtIn, ...own];
 }
 
-
-// ---- files
-
-/** JSON Lines. Later lines win; lines that aren't records (like a file's header) are skipped. */
-export function parseJsonl(text) {
-  const out = new Map();
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const r = JSON.parse(line);
-    if (typeof r?.kind !== "string" || typeof r.ref !== "string") continue;
-    out.set(`${r.kind} ${r.ref}`, r);
-  }
-  return [...out.values()];
+export function emptyProjectedState() {
+  return {
+    v: FORMAT,
+    seq: 0,
+    syncedName: null,
+    nameOrder: null,
+    passages: {},
+    highlights: {},
+    colors: {},
+    blocks: {},
+    srsEvents: {},
+    seenIds: {},
+    events: [],
+    outbox: [],
+  };
 }
 
-// ---- a library on this device
+function beats(ev, prevOrder) {
+  return !prevOrder || compareEventOrder(ev, prevOrder) > 0;
+}
+
+export function applyEventToState(state, rawEvent) {
+  if (!rawEvent || typeof rawEvent.id !== "string" || typeof rawEvent.kind !== "string") return false;
+  if (state.seenIds[rawEvent.id]) {
+    if (Number.isInteger(rawEvent.seq) && rawEvent.seq > state.seq) state.seq = rawEvent.seq;
+    return false;
+  }
+  const ev = {
+    ...(Number.isInteger(rawEvent.seq) ? { seq: rawEvent.seq } : {}),
+    id: rawEvent.id,
+    ts: Number.isFinite(rawEvent.ts) ? Math.trunc(rawEvent.ts) : nowMs(),
+    app: String(rawEvent.app || "selah-vault"),
+    kind: rawEvent.kind,
+    ref: rawEvent.ref ?? null,
+    tags: Array.isArray(rawEvent.tags) ? rawEvent.tags : autoTags(rawEvent.kind, rawEvent.ref, rawEvent.data),
+    data: rawEvent.data && typeof rawEvent.data === "object" ? rawEvent.data : {},
+  };
+  state.seenIds[ev.id] = 1;
+  state.events.push(ev);
+  if (Number.isInteger(ev.seq) && ev.seq > state.seq) state.seq = ev.seq;
+  const ord = { ts: ev.ts, id: ev.id };
+
+  if (ev.kind === "library.renamed" && typeof ev.data.name === "string" && ev.data.name.trim()) {
+    if (beats(ord, state.nameOrder)) {
+      state.syncedName = ev.data.name.trim();
+      state.nameOrder = ord;
+    }
+  } else if (ev.kind === "passage.saved" && typeof ev.ref === "string" && splitRef(ev.ref)) {
+    const cur = state.passages[ev.ref];
+    const earliest = cur?.createdTs ? Math.min(cur.createdTs, ev.ts) : ev.ts;
+    if (beats(ord, cur?.order)) {
+      state.passages[ev.ref] = { ref: ev.ref, createdTs: earliest, updatedTs: ev.ts, removedTs: null, apps: ev.data.apps ?? cur?.apps ?? {}, order: ord };
+    } else if (cur) cur.createdTs = earliest;
+  } else if (ev.kind === "passage.removed" && typeof ev.ref === "string") {
+    const cur = state.passages[ev.ref];
+    if (beats(ord, cur?.order)) {
+      state.passages[ev.ref] = { ref: ev.ref, createdTs: cur?.createdTs ?? ev.ts, updatedTs: ev.ts, removedTs: ev.ts, apps: cur?.apps ?? {}, order: ord };
+    }
+  } else if (ev.kind === "highlight.set" && typeof ev.ref === "string" && splitRef(ev.ref)?.verse != null) {
+    const cur = state.highlights[ev.ref];
+    const givenCreated = Number.isFinite(ev.data.createdTs) ? ev.data.createdTs : ev.ts;
+    const earliest = cur?.createdTs ? Math.min(cur.createdTs, givenCreated) : givenCreated;
+    if (beats(ord, cur?.order)) {
+      state.highlights[ev.ref] = {
+        ref: ev.ref,
+        color: String(ev.data.color || "yellow"),
+        quote: typeof ev.data.quote === "string" ? ev.data.quote : (cur?.quote ?? ""),
+        edited: Boolean(cur && !cur.deleted),
+        createdTs: earliest,
+        updatedTs: ev.ts,
+        deleted: false,
+        order: ord,
+      };
+    } else if (cur) cur.createdTs = earliest;
+  } else if (ev.kind === "highlight.removed" && typeof ev.ref === "string") {
+    const cur = state.highlights[ev.ref];
+    if (beats(ord, cur?.order)) {
+      state.highlights[ev.ref] = { ...(cur ?? { ref: ev.ref, color: "yellow", createdTs: ev.ts }), updatedTs: ev.ts, deleted: true, order: ord };
+    }
+  } else if (ev.kind === "color.set" && typeof ev.data.id === "string" && COLOR_ID.test(ev.data.id)) {
+    const id = ev.data.id;
+    const cur = state.colors[id];
+    const earliest = cur?.createdTs ? Math.min(cur.createdTs, ev.ts) : ev.ts;
+    if (beats(ord, cur?.order)) {
+      state.colors[id] = { id, name: String(ev.data.name ?? ""), hex: typeof ev.data.hex === "string" ? ev.data.hex : (cur?.hex ?? null), createdTs: earliest, updatedTs: ev.ts, deleted: false, order: ord };
+    }
+  } else if (ev.kind === "color.removed" && typeof ev.data.id === "string") {
+    const id = ev.data.id;
+    const cur = state.colors[id];
+    if (beats(ord, cur?.order)) {
+      state.colors[id] = { ...(cur ?? { id, name: "", hex: null, createdTs: ev.ts }), updatedTs: ev.ts, deleted: true, order: ord };
+    }
+  } else if (ev.kind === "note.block.set" && typeof ev.data.id === "string") {
+    const id = ev.data.id;
+    const cur = state.blocks[id];
+    if (beats(ord, cur?.order)) {
+      state.blocks[id] = { id, ref: ev.ref, outlineId: String(ev.data.outlineId ?? (ev.ref || "inbox")), parentId: ev.data.parentId ?? null, rank: String(ev.data.rank ?? "n"), text: String(ev.data.text ?? ""), card: ev.data.card ?? null, apps: ev.data.apps ?? {}, updatedTs: ev.ts, deleted: false, order: ord };
+    }
+  } else if (ev.kind === "note.block.deleted" && typeof ev.data.id === "string") {
+    const id = ev.data.id;
+    const cur = state.blocks[id];
+    if (beats(ord, cur?.order)) state.blocks[id] = { ...(cur ?? { id, ref: ev.ref }), updatedTs: ev.ts, deleted: true, order: ord };
+  } else if ((ev.kind === "srs.reviewed" || ev.kind === "srs.card") && typeof ev.data.cardKey === "string") {
+    const list = (state.srsEvents[ev.data.cardKey] ??= []);
+    list.push(ev);
+    list.sort(compareEventOrder);
+  }
+  return true;
+}
+
+export function projectSrsCards(state) {
+  const out = [];
+  for (const [cardKey, evs] of Object.entries(state.srsEvents)) {
+    let cardState = "absent";
+    let lastActiveTs = null;
+    let lastResetTs = null;
+    let reviews = [];
+    let ref = cardKey.includes("#") && !cardKey.startsWith("x-") ? cardKey.split("#")[0] : null;
+    for (const ev of evs) {
+      if (ev.ref) ref = ev.ref;
+      if (ev.kind === "srs.reviewed") {
+        cardState = "active";
+        lastActiveTs = ev.ts;
+        reviews.push({ id: ev.id, ts: ev.ts, rating: ev.data.rating, ...(ev.data.rung ? { rung: ev.data.rung } : {}), ...(ev.data.hints !== undefined ? { hints: ev.data.hints } : {}), ...(ev.data.promptCard ? { promptCard: ev.data.promptCard } : {}) });
+      } else {
+        const action = ev.data.action;
+        if (action === "add" || action === "resume") {
+          cardState = "active";
+          lastActiveTs = ev.ts;
+        } else if (action === "suspend") {
+          if (cardState === "active") cardState = "suspended";
+        } else if (action === "drop") {
+          if (cardState === "active" || cardState === "suspended") cardState = "dropped";
+        } else if (action === "reset") {
+          lastResetTs = ev.ts;
+          reviews = [];
+        }
+      }
+    }
+    if (cardState === "absent") continue;
+    const passageRef = cardKey.includes("#") && !cardKey.startsWith("x-") ? cardKey.split("#")[0] : null;
+    const removedTs = passageRef ? state.passages[passageRef]?.removedTs ?? null : null;
+    const pausedByPassage = Boolean(removedTs && lastActiveTs !== null && lastActiveTs <= removedTs);
+    out.push({ cardKey, ref, state: cardState, lastActiveTs, lastResetTs, pausedByPassage, reviews });
+  }
+  return out;
+}
+
+export function hydrateStateFromBootstrap(state, snap) {
+  if (!snap || typeof snap !== "object") return;
+  state.seq = Math.max(state.seq, Number(snap.seq) || 0);
+  if (snap.library?.name) {
+    state.syncedName = snap.library.name;
+    state.nameOrder = { ts: 1, id: "ev_bootstrap_name" };
+  }
+  for (const p of snap.passages ?? []) {
+    state.passages[p.ref] = { ref: p.ref, createdTs: p.createdTs ?? 0, updatedTs: p.updatedTs ?? 0, removedTs: null, apps: p.apps ?? {}, order: { ts: p.updatedTs ?? 0, id: "ev_bootstrap" } };
+  }
+  for (const r of snap.removedPassages ?? []) {
+    const cur = state.passages[r.ref];
+    state.passages[r.ref] = { ref: r.ref, createdTs: cur?.createdTs ?? r.removedTs ?? 0, updatedTs: r.removedTs ?? 0, removedTs: r.removedTs ?? 0, apps: cur?.apps ?? {}, order: { ts: r.removedTs ?? 0, id: "ev_bootstrap" } };
+  }
+  for (const h of snap.highlights ?? []) {
+    state.highlights[h.ref] = { ref: h.ref, color: h.color || "yellow", quote: h.quote ?? "", createdTs: h.createdTs ?? 0, updatedTs: h.updatedTs ?? 0, deleted: false, order: { ts: h.updatedTs ?? 0, id: "ev_bootstrap" } };
+  }
+  for (const c of snap.colors ?? []) {
+    if (c.builtIn && !c.name) continue;
+    state.colors[c.id] = { id: c.id, name: c.name ?? "", hex: c.hex ?? null, createdTs: c.createdTs ?? 0, updatedTs: c.updatedTs ?? 0, deleted: false, order: { ts: c.updatedTs ?? 0, id: "ev_bootstrap" } };
+  }
+  for (const b of snap.blocks ?? []) {
+    state.blocks[b.id] = { ...b, deleted: false, order: { ts: b.updatedTs ?? 0, id: "ev_bootstrap" } };
+  }
+  for (const c of snap.srs?.cards ?? []) {
+    const list = [];
+    if (c.lastResetTs) list.push({ id: `ev_boot_rst_${c.cardKey}`, ts: c.lastResetTs, app: "selah-vault", kind: "srs.card", ref: c.ref, data: { cardKey: c.cardKey, action: "reset" } });
+    if (c.lastActiveTs) list.push({ id: `ev_boot_act_${c.cardKey}`, ts: c.lastActiveTs, app: "selah-vault", kind: "srs.card", ref: c.ref, data: { cardKey: c.cardKey, action: "add" } });
+    for (const rv of c.reviews ?? []) list.push({ id: rv.id || newEventId(), ts: rv.ts, app: "selah-vault", kind: "srs.reviewed", ref: c.ref, data: { cardKey: c.cardKey, ...rv } });
+    if (c.state === "suspended") list.push({ id: `ev_boot_sus_${c.cardKey}`, ts: (c.lastActiveTs ?? 0) + 1, app: "selah-vault", kind: "srs.card", ref: c.ref, data: { cardKey: c.cardKey, action: "suspend" } });
+    if (c.state === "dropped") list.push({ id: `ev_boot_drp_${c.cardKey}`, ts: (c.lastActiveTs ?? 0) + 1, app: "selah-vault", kind: "srs.card", ref: c.ref, data: { cardKey: c.cardKey, action: "drop" } });
+    list.sort(compareEventOrder);
+    state.srsEvents[c.cardKey] = list;
+  }
+}
+
+function recordToEvents(record, { app = "selah-vault", ts = nowMs() } = {}) {
+  if (!record || typeof record !== "object") throw new Error("a record is a JSON object");
+  if (typeof record.id === "string" && record.id.startsWith("ev_") && typeof record.kind === "string" && record.kind.includes(".")) {
+    return [record];
+  }
+  const { kind, ref } = record;
+  if (typeof kind !== "string" || typeof ref !== "string") throw new Error("kind and ref are required");
+  const eventTs = Number.isSafeInteger(record.updated) ? record.updated * 1000 : ts;
+  const make = (evKind, evRef, data) => ({
+    id: newEventId(),
+    ts: eventTs,
+    app,
+    kind: evKind,
+    ref: evRef,
+    tags: autoTags(evKind, evRef, data),
+    data,
+  });
+
+  if (kind === "library") {
+    if (ref !== "name") throw new Error(`not a library setting: ${ref}`);
+    if (record.deleted) return [];
+    if (typeof record.name !== "string" || !record.name.trim()) throw new Error("a library's name is text");
+    return [make("library.renamed", null, { name: record.name.trim() })];
+  }
+  if (kind === "color") {
+    if (!COLOR_ID.test(ref)) throw new Error(`not a color id: ${ref}`);
+    if (record.deleted === true) return [make("color.removed", null, { id: ref })];
+    if (record.hex !== undefined && record.hex !== null && !HEX.test(record.hex)) throw new Error("hex looks like #RRGGBB");
+    if (!record.hex && !COLORS.includes(ref)) throw new Error("a new color needs a hex");
+    return [make("color.set", null, { id: ref, name: String(record.name ?? ""), ...(record.hex ? { hex: record.hex.toLowerCase() } : {}) })];
+  }
+  const parsed = splitRef(ref);
+  if (!parsed) throw new Error(`not a canonical ref: ${ref}`);
+  if (kind === "highlight") {
+    if (parsed.verse === null || parsed.end !== null) throw new Error("a highlight's ref is one verse");
+    if (record.deleted === true) return [make("highlight.removed", ref, {})];
+    const parts = Array.isArray(record.highlights) ? record.highlights : record.color ? [{ color: record.color }] : [];
+    if (!parts.length || parts.some((h) => !h || typeof h.color !== "string")) throw new Error("every highlight needs a color");
+    const best = parts.reduce((a, b) => ((b.edited ?? b.created ?? 0) >= (a.edited ?? a.created ?? 0) ? b : a));
+    const quote = parts.map((h) => h.quote).filter(Boolean).join(" … ");
+    const createdSec = parts.map((h) => h.created).filter(Number.isSafeInteger);
+    const createdTs = createdSec.length ? Math.min(...createdSec) * 1000 : undefined;
+    return [make("highlight.set", ref, { color: best.color, ...(quote ? { quote } : {}), ...(createdTs ? { createdTs } : {}) })];
+  }
+  if (kind === "passage") {
+    return [make(record.deleted === true ? "passage.removed" : "passage.saved", ref, record.deleted ? {} : { apps: record.apps ?? {} })];
+  }
+  if (kind === "note") {
+    const blockId = `b_${ref}`;
+    if (record.deleted === true) return [make("note.block.deleted", ref, { id: blockId })];
+    return [make("note.block.set", ref, { id: blockId, outlineId: ref, parentId: null, rank: "n", text: String(record.body ?? "") })];
+  }
+  throw new Error(`unknown kind ${kind}`);
+}
+
+export function parseJsonl(text) {
+  const out = [];
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const obj = JSON.parse(line);
+    if (!obj || typeof obj !== "object") continue;
+    if (obj["selah-vault"] !== undefined) continue;
+    if (typeof obj.kind === "string" && obj.kind.includes(".") && typeof obj.id === "string") out.push(obj);
+    else if (typeof obj.kind === "string" && typeof obj.ref === "string") out.push(obj);
+  }
+  return out;
+}
 
 export function memoryStore() {
   const m = new Map();
-  return { load: (lib) => structuredClone(m.get(lib) ?? null), save: (lib, s) => m.set(lib, structuredClone(s)), clear: (lib) => m.delete(lib) };
+  return {
+    load: (lib) => structuredClone(m.get(lib) ?? null),
+    save: (lib, s) => m.set(lib, structuredClone(s)),
+    clear: (lib) => m.delete(lib),
+  };
 }
 
-// items: id → { t: the record's JSON text, n: local change number, s: the transport it came from }
-const emptyState = () => ({ v: FORMAT, device: b64url(randomBytes(9)), n: 0, items: {}, remotes: {} });
+function toHighlightRecord(h) {
+  const created = Math.floor((h.createdTs || 0) / 1000);
+  const updated = Math.floor((h.updatedTs || 0) / 1000);
+  const part = { color: h.color, created, ...(h.edited && updated >= created ? { edited: updated } : {}), ...(h.quote ? { quote: h.quote } : {}) };
+  return { kind: "highlight", ref: h.ref, highlights: [part], updated };
+}
+
+function toColorRecord(c) {
+  return { kind: "color", id: c.id, ref: c.id, name: c.name ?? "", ...(c.hex ? { hex: c.hex } : {}), createdTs: c.createdTs, updatedTs: c.updatedTs, created: Math.floor((c.createdTs || 0) / 1000), updated: Math.floor((c.updatedTs || 0) / 1000) };
+}
 
 export class Library {
-  /** `name` is what this device calls the library until a synced name arrives (the name typed to unlock). */
-  static async open({ keyText, name = "Personal", store = memoryStore(), transports = [] }) {
-    const key = await parseKey(keyText);
-    const keys = await deriveKeys(key);
-    return new Library({ keyText: await formatKey(key), name, store, keys, transports });
+  static async open({ lib, userId, token = null, name = "Personal", app = "selah-vault", store = memoryStore(), transports = [] } = {}) {
+    const id = userId || lib || (token?.startsWith("sv2.") ? token.split(".")[1] : null) || `local_${b64url(randomBytes(8))}`;
+    return new Library({ lib: id, token, name, app, store, transports });
   }
 
-  constructor({ keyText, name, store, keys, transports }) {
-    Object.assign(this, { keyText, store, keys, transports });
-    this.localName = name;
-    const saved = store.load(keys.lib);
-    this.state = saved?.v === FORMAT ? saved : emptyState();
-    this.records = new Map(Object.entries(this.state.items).map(([id, it]) => [id, JSON.parse(it.t)]));
-    this.blobs = new Map();
+  constructor({ lib = "local", token = null, name = "Personal", app = "selah-vault", store = memoryStore(), transports = [] } = {}) {
+    Object.assign(this, { id: lib, token, localName: name, app, store, transports });
+    const saved = store.load(lib);
+    this.state = saved?.v === FORMAT ? saved : emptyProjectedState();
+    this.lastTs = nowMs();
     this.status = { state: transports.length ? "idle" : "local", remotes: {} };
     this.listeners = new Set();
     this.running = null;
@@ -291,40 +364,20 @@ export class Library {
   }
 
   get lib() {
-    return this.keys.lib;
+    return this.id;
   }
 
-  /** The library's synced name (its `library name` record), else what this device called it. */
   get name() {
     return this.syncedName ?? this.localName;
   }
 
-  /** The name from the library itself, or null when no device has written one yet. */
   get syncedName() {
-    return this.find("library", NAME_REF)?.name ?? null;
+    return this.state.syncedName ?? null;
   }
 
-  /** Renames the library everywhere: a `library name` record, synced like any other edit. */
-  rename(name) {
-    this.localName = name;
-    return this.put({ ...(this.find("library", NAME_REF) ?? {}), kind: "library", ref: NAME_REF, name });
-  }
-
-  /**
-   * Gives a library that has no name record this device's name for it, once every transport has
-   * synced, so a name chosen elsewhere has arrived first. It's written with `updated` 0, so it never
-   * beats a name chosen on any device: a name typed to unlock never renames a library.
-   */
-  async adoptName() {
-    if (this.syncedName !== null || !this.localName) return false;
-    if (this.transports.some((t) => this.status.remotes[t.name]?.state !== "synced")) return false;
-    const id = await itemId(this.keys, "library", NAME_REF);
-    if (this.state.items[id] || this.erased) return false;
-    const r = { kind: "library", ref: NAME_REF, updated: 0, name: this.localName };
-    this.write(id, r, JSON.stringify(r), null);
-    this.emit();
-    this.sync();
-    return true;
+  nextTs() {
+    this.lastTs = Math.max(nowMs(), this.lastTs + 1);
+    return this.lastTs;
   }
 
   onChange(fn) {
@@ -337,21 +390,53 @@ export class Library {
     for (const fn of this.listeners) fn(this);
   }
 
-  /** Sets how this library syncs: through its server (`serverTransport`), or not at all (`[]`). */
-  use(transports) {
-    this.transports = transports;
-    this.status = { state: transports.length ? "idle" : "local", remotes: {} };
-    this.emit();
-    return this.sync();
-  }
-
-  /** Every live record, optionally of one kind. */
   all(kind) {
-    return [...this.records.values()].filter((r) => !r.deleted && (!kind || r.kind === kind));
+    if (kind === "highlight") {
+      return Object.values(this.state.highlights).filter((h) => !h.deleted).map(toHighlightRecord);
+    }
+    if (kind === "color") {
+      return Object.values(this.state.colors).filter((c) => !c.deleted).map(toColorRecord);
+    }
+    if (kind === "passage") {
+      return Object.values(this.state.passages).filter((p) => !p.removedTs).map((p) => ({ kind: "passage", ...p }));
+    }
+    if (kind === "block" || kind === "note") {
+      return Object.values(this.state.blocks).filter((b) => !b.deleted).map((b) => ({ kind: "block", ...b }));
+    }
+    if (kind === "library") {
+      return this.syncedName ? [{ kind: "library", ref: "name", name: this.syncedName }] : [];
+    }
+    if (!kind) {
+      return [...this.all("highlight"), ...this.all("color"), ...this.all("passage"), ...this.all("block"), ...this.all("library")];
+    }
+    return [];
   }
 
   find(kind, ref) {
-    return this.all(kind).find((r) => r.ref === ref) ?? null;
+    return this.all(kind).find((r) => r.ref === ref || r.id === ref) ?? null;
+  }
+
+  srsCards() {
+    return projectSrsCards(this.state);
+  }
+
+  async appendEvents(rawEvents) {
+    if (!rawEvents?.length) return [];
+    const prepared = rawEvents.map((ev) => ({
+      id: ev.id || newEventId(),
+      ts: Number.isFinite(ev.ts) ? Math.trunc(ev.ts) : this.nextTs(),
+      app: ev.app || this.app,
+      kind: ev.kind,
+      ref: ev.ref ?? null,
+      tags: Array.isArray(ev.tags) ? ev.tags : autoTags(ev.kind, ev.ref, ev.data),
+      data: ev.data ?? {},
+    }));
+    for (const ev of prepared) {
+      if (applyEventToState(this.state, ev)) this.state.outbox.push(ev);
+    }
+    this.emit();
+    this.sync();
+    return prepared;
   }
 
   async put(record) {
@@ -359,34 +444,19 @@ export class Library {
     return record;
   }
 
-  /**
-   * Saves edits on this device at once and syncs in the background. Each gets `updated` = now, or
-   * one second past the version it replaces when this device's clock is behind, so an edit always
-   * beats what it was made from. All or nothing: one bad record and nothing is saved. Up to 100
-   * records saved together reach a server in one POST, so it takes all of them or none.
-   */
   async putMany(records) {
-    const t = now();
+    const events = [];
     for (const record of records) {
-      const err = checkRecord(record);
-      if (err) throw new Error(err);
+      const clean = record?.id?.startsWith?.("ev_") ? record : { ...record, updated: undefined };
+      events.push(...recordToEvents(clean, { app: this.app, ts: this.nextTs() }));
     }
-    const ids = await Promise.all(records.map((record) => itemId(this.keys, record.kind, record.ref)));
-    // Written back to back with nothing awaited between, so they hold consecutive change numbers.
-    const group = this.state.n + 1;
-    records.forEach((record, i) => {
-      const r = stamp(record, this.records.get(ids[i])?.updated, t);
-      this.write(ids[i], r, JSON.stringify(r), null, records.length > 1 ? group : undefined);
-    });
-    this.emit();
-    this.sync();
+    if (events.length) await this.appendEvents(events);
   }
 
-  /**
-   * Highlights a canonical verse or same-chapter range ("ROM.5.3-5") in one color: one record per
-   * verse, saved together (one POST, all or none). Verses already that color stay as they are.
-   * → { ref, verses, written }. Throws on a bad range (see ranges.js expandRange).
-   */
+  remove(kind, ref) {
+    return this.put({ kind, ref, deleted: true });
+  }
+
   async highlightRange(ref, color = "yellow", options = {}) {
     const w = rangeWrites(ref, color, now(), (v) => this.find("highlight", v), options);
     if (w.error) throw new Error(w.error);
@@ -394,10 +464,6 @@ export class Library {
     return { ref: w.ref, verses: w.verses, written: w.records.map((r) => r.ref) };
   }
 
-  /**
-   * Live highlight records in canonical order, one per verse; with { group: "ranges" }, the runs the
-   * app lists (ranges.js listRanges): [{ ref, verses, color, time }].
-   */
   highlights({ group } = {}) {
     const records = this.all("highlight").sort((a, b) => compareRefs(a.ref, b.ref));
     if (group === undefined || group === "verses") return records;
@@ -405,93 +471,96 @@ export class Library {
     return rangeView(listRanges(records, palette(this.all("color")).map((c) => c.id)));
   }
 
-  remove(kind, ref) {
-    return this.put({ kind, ref, deleted: true });
+  async savePassage(ref, { apps = {} } = {}) {
+    if (!splitRef(ref)) throw new Error(`not a canonical ref: ${ref}`);
+    await this.appendEvents([{ kind: "passage.saved", ref, data: { apps } }]);
+    return this.find("passage", ref);
   }
 
-  /** Merges records from a file by the merge rule: each replaces this device's copy only if newer. */
-  async merge(records) {
+  async removePassage(ref) {
+    if (!splitRef(ref)) throw new Error(`not a canonical ref: ${ref}`);
+    await this.appendEvents([{ kind: "passage.removed", ref, data: {} }]);
+  }
+
+  async putColor({ id, name = "", hex = null }) {
+    return this.put({ kind: "color", ref: id, name, ...(hex ? { hex } : {}) });
+  }
+
+  rename(name) {
+    this.localName = name;
+    return this.put({ kind: "library", ref: "name", name });
+  }
+
+  async adoptName() {
+    if (this.syncedName !== null || !this.localName || this.erased) return false;
+    if (this.transports.some((t) => this.status.remotes[t.name]?.state !== "synced")) return false;
+    await this.appendEvents([{ id: newEventId(), ts: 1, app: this.app, kind: "library.renamed", ref: null, data: { name: this.localName } }]);
+    return true;
+  }
+
+  async merge(entries) {
     let changed = 0;
-    for (const record of records) {
-      if (checkRecord(record)) continue;
-      const r = Number.isSafeInteger(record.updated) ? record : { ...record, updated: now() };
-      if ((await this.offer(r, JSON.stringify(r), null)) === "newer") changed++;
+    const added = [];
+    for (const entry of entries) {
+      let evs;
+      try {
+        evs = recordToEvents(entry, { app: this.app, ts: this.nextTs() });
+      } catch {
+        continue;
+      }
+      for (const ev of evs) {
+        if (applyEventToState(this.state, ev)) {
+          added.push(ev);
+          changed++;
+        }
+      }
     }
-    if (changed) {
+    if (added.length) {
+      this.state.outbox.push(...added);
       this.emit();
       this.sync();
     }
     return changed;
   }
 
-  /** `group`: the first change number of a putMany, so a push keeps its records in one POST. */
-  write(id, record, text, source, group) {
-    this.state.items[id] = source ? { t: text, n: ++this.state.n, s: source } : group ? { t: text, n: ++this.state.n, g: group } : { t: text, n: ++this.state.n };
-    this.records.set(id, record);
-  }
-
-  /** Keeps `record` if it beats this device's copy. "newer", "older" (this device's wins) or "same". */
-  async offer(record, text, source, id) {
-    id ??= await itemId(this.keys, record.kind, record.ref);
-    const mine = this.state.items[id];
-    const c = mine ? compareVersions({ updated: record.updated, text }, { updated: this.records.get(id).updated, text: mine.t }) : 1;
-    if (c > 0) this.write(id, record, text, source);
-    return c > 0 ? "newer" : c < 0 ? "older" : "same";
-  }
-
-  /** One encrypted item from a server. Items that don't decrypt, or sit under the wrong id, are "bad". */
-  async receive(id, blob, source) {
-    let text;
-    let record;
-    try {
-      text = await decryptText(this.keys, id, blob);
-      record = JSON.parse(text);
-      if ((await itemId(this.keys, record.kind, record.ref)) !== id) return "bad";
-    } catch {
-      return "bad";
+  toFile() {
+    const header = { "selah-vault": FORMAT, library: this.lib, name: this.name, exportedAt: nowMs() };
+    const lines = [JSON.stringify(header)];
+    if (this.state.events.length) {
+      for (const ev of this.state.events) lines.push(JSON.stringify(ev));
+    } else {
+      if (this.syncedName) lines.push(JSON.stringify({ id: newEventId(), ts: nowMs(), app: this.app, kind: "library.renamed", ref: null, data: { name: this.syncedName } }));
+      for (const c of Object.values(this.state.colors).filter((x) => !x.deleted)) {
+        lines.push(JSON.stringify({ id: newEventId(), ts: c.updatedTs || nowMs(), app: this.app, kind: "color.set", ref: null, data: { id: c.id, name: c.name, ...(c.hex ? { hex: c.hex } : {}) } }));
+      }
+      for (const p of Object.values(this.state.passages).filter((x) => !x.removedTs)) {
+        lines.push(JSON.stringify({ id: newEventId(), ts: p.updatedTs || nowMs(), app: this.app, kind: "passage.saved", ref: p.ref, data: { apps: p.apps ?? {} } }));
+      }
+      for (const h of Object.values(this.state.highlights).filter((x) => !x.deleted)) {
+        lines.push(JSON.stringify({ id: newEventId(), ts: h.updatedTs || nowMs(), app: this.app, kind: "highlight.set", ref: h.ref, data: { color: h.color, ...(h.quote ? { quote: h.quote } : {}) } }));
+      }
     }
-    const result = await this.offer(record, text, source, id);
-    if (result === "newer") this.blobs.set(id, { n: this.state.items[id].n, blob });
-    return result;
+    return `${lines.join("\n")}\n`;
   }
 
-  async blob(id) {
-    const item = this.state.items[id];
-    const cached = this.blobs.get(id);
-    if (cached?.n === item.n) return cached.blob;
-    const blob = await seal(this.keys.enc, id, pad(item.t));
-    this.blobs.set(id, { n: item.n, blob });
-    return blob;
-  }
-
-  remote(name) {
-    return (this.state.remotes[name] ??= { cursor: 0, seq: 0, epoch: null, sent: 0, all: false, redo: [] });
-  }
-
-  /** Ids a transport hasn't got yet, oldest change first. */
-  unsent(name) {
-    const r = this.remote(name);
-    const redo = new Set(r.redo);
-    return Object.entries(this.state.items)
-      .filter(([id, it]) => r.all || redo.has(id) || (it.n > r.sent && it.s !== name))
-      .sort((a, b) => a[1].n - b[1].n)
-      .map(([id]) => id);
-  }
-
-  /** How many changes haven't reached any transport yet (all of them when there are none). */
   waiting() {
-    if (!this.transports.length) return 0;
-    return Math.min(...this.transports.map((t) => this.unsent(t.name).length));
+    return this.transports.length ? this.state.outbox.length : 0;
   }
 
-  /** Every transport in turn. Concurrent calls share one run. Never throws: see `status`. */
+  use(transports) {
+    for (const t of this.transports) t.close?.();
+    this.transports = transports;
+    this.status = { state: transports.length ? "idle" : "local", remotes: {} };
+    this.emit();
+    return this.sync();
+  }
+
   sync() {
     if (this.running) {
       this.again = true;
       return this.running;
     }
     this.running = (async () => {
-      // Without this, a run with nothing to await would finish before `running` is even set.
       await null;
       try {
         do {
@@ -513,11 +582,6 @@ export class Library {
     return this.running;
   }
 
-  /**
-   * Sets `status.state` from the run that just finished: "synced", "offline", "error", "idle" (not
-   * synced yet) or "local" (no transports). A run in progress doesn't change it: syncing is never
-   * shown. `status.failures` counts runs in a row that failed, so a one-off failure can be ignored.
-   */
   setStatus() {
     const states = this.transports.map((t) => this.status.remotes[t.name]?.state ?? "idle");
     const worst = ["error", "offline", "idle", "synced"].find((s) => states.includes(s));
@@ -526,184 +590,118 @@ export class Library {
     this.emit();
   }
 
-  /** The library as a readable JSON Lines file: a header line, then one record per line. */
-  toFile({ deleted = false } = {}) {
-    const header = { "hidden-word": FORMAT, library: this.lib, device: this.state.device, name: this.name };
-    const lines = Object.entries(this.state.items)
-      .filter(([id]) => deleted || !this.records.get(id).deleted)
-      .map(([, it]) => it.t);
-    return [JSON.stringify(header), ...lines].join("\n") + "\n";
-  }
-
-  /** Erases the library from every transport and this device. */
   async erase() {
     this.erased = true;
-    for (const t of this.transports) await t.erase?.(this);
-    this.state = emptyState();
-    this.records.clear();
-    this.blobs.clear();
+    for (const t of this.transports) {
+      t.close?.();
+      await t.erase?.(this);
+    }
+    this.state = emptyProjectedState();
     this.store.clear(this.lib);
     for (const fn of this.listeners) fn(this);
   }
 
-  /** Forgets this device's copy without touching anything else. */
   forget() {
-    this.store.clear(this.lib);
+    for (const t of this.transports) t.close?.();
     this.listeners.clear();
   }
 }
 
-// ---- syncing through a server (spec section 5.6)
+export function serverTransport({ url = "", token = null, fetch: fetchFn, WebSocket: WsClass = globalThis.WebSocket } = {}) {
+  const base = url.replace(/\/$/, "");
+  const name = `server ${base}`;
+  let ws = null;
+  let closed = false;
 
-/**
- * Whether a server's answer shows it lost data since `seen` (the epoch and latest seq remembered):
- * a different epoch, or a seq lower than the latest seen. Then the client refills it (5.6, step 3).
- */
-export function serverLostData(seen, answer) {
-  return (seen.epoch !== null && answer.epoch !== seen.epoch) || (answer.seq !== undefined && answer.seq < seen.seq);
-}
-
-/**
- * Ids (oldest change first) → POST-sized batches, in order. Ids that share a group (saved by one
- * putMany) stay in one batch when the group fits one, so the server writes them all or none.
- */
-export function batches(ids, groupOf = () => undefined, size = BATCH) {
-  const out = [];
-  let chunk = [];
-  for (let i = 0; i < ids.length; ) {
-    const g = groupOf(ids[i]);
-    let j = i + 1;
-    while (g !== undefined && j < ids.length && groupOf(ids[j]) === g) j++;
-    const run = ids.slice(i, j);
-    if (chunk.length && chunk.length + run.length > size && run.length <= size) (out.push(chunk), (chunk = []));
-    for (const id of run) {
-      if (chunk.length === size) (out.push(chunk), (chunk = []));
-      chunk.push(id);
-    }
-    i = j;
-  }
-  if (chunk.length) out.push(chunk);
-  return out;
-}
-
-/** A Selah Vault server. `url` "" means the site this page came from. */
-export function serverTransport({ url = "", fetch: f } = {}) {
-  const name = `server ${url}`;
-  const call = async (lib, method, query = "", body) => {
-    const headers = { authorization: `Bearer ${lib.keys.auth}` };
-    if (body) headers["content-type"] = "application/json";
-    const res = await (f ?? globalThis.fetch.bind(globalThis))(`${url}/v1/lib/${lib.lib}${query}`, {
+  const call = async (lib, method, path, body) => {
+    const authToken = token ?? lib.token;
+    const headers = {};
+    if (authToken) headers.authorization = `Bearer ${authToken}`;
+    if (body !== undefined) headers["content-type"] = "application/json";
+    const res = await (fetchFn ?? globalThis.fetch.bind(globalThis))(`${base}${path}`, {
       method,
+      credentials: authToken ? "omit" : "same-origin",
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) throw new SyncError(res.status, await res.text().catch(() => ""));
     return res.status === 204 ? null : res.json();
   };
 
-  // The server lost data (it's a new library, or older than what we've seen): start over and
-  // send it everything we have.
-  const lost = serverLostData;
-  const restart = (r, answer) => Object.assign(r, { cursor: 0, seq: 0, epoch: answer.epoch, sent: 0, all: true, redo: [] });
-
-  /** Sends what the server hasn't got. False when the server lost data and must be refilled. */
-  async function push(lib, r) {
-    const ids = lib.unsent(name);
-    for (const chunk of batches(ids, (id) => lib.state.items[id].g)) {
-      const ns = chunk.map((id) => lib.state.items[id].n);
-      const items = await Promise.all(chunk.map(async (id) => ({ id, blob: await lib.blob(id) })));
-      const answer = await call(lib, "POST", "", { items });
-      if (lost(r, answer)) {
-        restart(r, answer);
-        return false;
-      }
-      r.epoch = answer.epoch;
-      // Our items took the last n seqs. When the one before them is our cursor, nobody else wrote
-      // since our last read, so there is nothing new to pull and no reason to read our own back.
-      if (answer.seq - items.length === r.cursor) r.cursor = answer.seq;
-      r.seq = Math.max(r.seq, answer.seq);
-      const done = new Set(chunk);
-      r.redo = r.redo.filter((id) => !done.has(id));
-      if (!r.all) r.sent = Math.max(r.sent, ...ns);
-      lib.emit();
+  const openSocket = (lib) => {
+    if (closed || ws || !WsClass) return;
+    try {
+      const origin = base || (typeof location !== "undefined" ? location.origin : "");
+      if (!origin || !/^https?:\/\//.test(origin)) return;
+      const wsUrl = `${origin.replace(/^http/, "ws")}/v2/ws`;
+      const authToken = token ?? lib.token;
+      const protocols = authToken ? ["selah-v2", `token.${authToken}`] : ["selah-v2"];
+      ws = new WsClass(wsUrl, protocols);
+      ws.addEventListener("message", (e) => {
+        try {
+          const msg = JSON.parse(String(e.data));
+          if ((msg?.type === "poke" || msg?.type === "hello") && Number(msg.seq) > lib.state.seq) {
+            lib.sync();
+          }
+        } catch {}
+      });
+      const clear = () => { ws = null; };
+      ws.addEventListener("close", clear);
+      ws.addEventListener("error", clear);
+    } catch {
+      ws = null;
     }
-    if (r.all) Object.assign(r, { all: false, sent: Math.max(r.sent, ...ids.map((id) => lib.state.items[id]?.n ?? 0)) });
-    return true;
-  }
-
-  async function pull(lib, r) {
-    for (;;) {
-      const page = await call(lib, "GET", `?after=${r.cursor}`);
-      if (lost(r, page)) {
-        restart(r, page);
-        return false;
-      }
-      if (page.epoch !== null) r.epoch = page.epoch;
-      r.seq = Math.max(r.seq, page.seq ?? 0);
-      for (const { seq, id, blob } of page.items) {
-        // This device has a newer copy than the server: send it again.
-        if ((await lib.receive(id, blob, name)) === "older" && !r.redo.includes(id)) r.redo.push(id);
-        r.cursor = seq;
-        r.seq = Math.max(r.seq, seq);
-      }
-      if (page.items.length) lib.emit();
-      if (!page.more) return true;
-    }
-  }
+  };
 
   return {
     name,
     async sync(lib) {
-      const r = lib.remote(name);
-      for (let round = 0; round < 4; round++) {
-        const sent = lib.unsent(name).length > 0;
-        if (!(await push(lib, r))) continue;
-        // After a push that left the cursor at the latest seq, a pull would only find our own items.
-        if (!(sent && r.cursor === r.seq) && !(await pull(lib, r))) continue;
-        if (!r.redo.length && !lib.unsent(name).length) return;
+      while (lib.state.outbox.length) {
+        const chunk = lib.state.outbox.slice(0, EVENT_BATCH);
+        const payload = chunk.map(({ seq: _seq, ...rest }) => rest);
+        const answer = await call(lib, "POST", "/v2/events", { events: payload });
+        const sentIds = new Set(chunk.map((e) => e.id));
+        lib.state.outbox = lib.state.outbox.filter((e) => !sentIds.has(e.id));
+        if (Number.isInteger(answer?.seq) && lib.state.seq > 0 && answer.seq - (answer.accepted ?? 0) === lib.state.seq) {
+          lib.state.seq = answer.seq;
+        }
+        lib.emit();
       }
+
+      if (lib.state.seq === 0) {
+        const snap = await call(lib, "GET", "/v2/bootstrap");
+        hydrateStateFromBootstrap(lib.state, snap);
+        lib.emit();
+      } else {
+        for (;;) {
+          const page = await call(lib, "GET", `/v2/events?after=${lib.state.seq}&limit=${EVENT_BATCH}`);
+          let changed = false;
+          for (const ev of page.events ?? []) {
+            if (applyEventToState(lib.state, ev)) changed = true;
+          }
+          lib.state.seq = Math.max(lib.state.seq, Number(page.seq) || 0);
+          if (changed) lib.emit();
+          if (!page.more) break;
+        }
+      }
+      openSocket(lib);
     },
     async erase(lib) {
-      await call(lib, "DELETE");
+      this.close();
+      await call(lib, "DELETE", "/v2/library");
+    },
+    close() {
+      closed = true;
+      try { ws?.close(); } catch {}
+      ws = null;
     },
   };
 }
 
-// ---- passkey key slots (WebAuthn PRF)
 
-export const prfSalt = () => sha256(te.encode("hidden-word/v1/prf"));
 
-export async function slotKeys(prf) {
-  const [slot, auth, kek] = await Promise.all([
-    hkdf(prf, "hidden-word/v1/slot", 16),
-    hkdf(prf, "hidden-word/v1/slot-auth", 32),
-    hkdf(prf, "hidden-word/v1/kek", 32),
-  ]);
-  return { slot: hex(slot), auth: b64url(auth), kek: await aesKey(kek) };
-}
 
-async function slotRequest({ server = "", prf, fetch: f = globalThis.fetch.bind(globalThis) }, method, body) {
-  const s = await slotKeys(prf);
-  const headers = { authorization: `Bearer ${s.auth}` };
-  if (body) headers["content-type"] = "application/json";
-  const res = await f(`${server}/v1/slot/${s.slot}`, { method, headers, body: body ? JSON.stringify(body(s)) : undefined });
-  return { res, s };
-}
 
-/** Wraps `{key, name}` under a passkey's PRF output and stores it in the passkey's slot. */
-export async function saveSlot({ keyText, name, ...opts }) {
-  const s = await slotKeys(opts.prf);
-  const wrapped = await seal(s.kek, s.slot, te.encode(JSON.stringify({ key: keyText, name })));
-  const { res } = await slotRequest(opts, "PUT", () => ({ wrapped }));
-  if (!res.ok) throw new SyncError(res.status, await res.text().catch(() => ""));
-}
 
-/** `{key, name}` from a passkey's slot, or null when the passkey has no slot. */
-export async function openSlot(opts) {
-  const { res, s } = await slotRequest(opts, "GET");
-  if (res.status === 404) return null;
-  if (!res.ok) throw new SyncError(res.status, await res.text().catch(() => ""));
-  const { wrapped } = await res.json();
-  return JSON.parse(td.decode(await unseal(s.kek, s.slot, wrapped)));
-}
+

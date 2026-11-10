@@ -1,20 +1,21 @@
 {
   "name": "selah-vault",
-  "description": "Selah Vault: Bible highlights on your devices, in any app. An open format and a server that can't read them.",
+  "description": "Selah Vault: Scripture passages, highlights, notes, and SRS across your devices and connected apps.",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "cf dev",
-    "deploy": "cf deploy && bun scripts/verify-assets.ts https://vault.selah.tools",
-    "verify:assets": "bun scripts/verify-assets.ts",
-    "dry-run": "cf deploy --dry-run",
-    "migrate:local": "sh scripts/d1-local.sh",
-    "test": "bun test",
-    "check": "tsrs --noEmit -p tsconfig.json",
-    "check:tsc": "tsc --noEmit",
-    "vectors": "bun scripts/vectors.ts",
-    "vendor": "bun scripts/vendor.js",
-    "conformance": "bun scripts/conformance.ts"
+    "dev": "mise run dev",
+    "db:migrate:local": "mise run db:migrate:local",
+    "db:migrate:prod": "mise run db:migrate:prod",
+    "hygiene": "mise run hygiene",
+    "typecheck": "mise run typecheck",
+    "test": "mise run test",
+    "dry-run": "mise run dry-run",
+    "jev:dry-run": "mise run jev:dry-run",
+    "check": "mise run check",
+    "vendor": "mise run vendor",
+    "verify": "mise run verify",
+    "deploy": "mise run deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250927.0",

@@ -1108,8 +1108,20 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
   .verse-text { --scripture-font-size: .9375rem; --scripture-line-height: 1.7; }
 }
 
-/* The start screen: passkey first when this browser has passkeys, then the key form, then a way to start. */
+/* The start screen: passkey, Apple, or email 6-digit code. */
 button.wide { width: 100%; padding: .8125rem 1rem; }
+.auth-stack { display: grid; gap: .625rem; margin: 0 0 .5rem; }
+.auth-btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; }
+.auth-btn svg { flex: none; }
+.grants-panel { width: 100%; padding: .875rem 0; border-bottom: 1px solid var(--line); }
+.grants-panel .subhead { font-size: .875rem; font-weight: 600; margin: 0 0 .5rem; color: var(--fg); letter-spacing: -.01em; }
+.grants-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.grants-list:empty { display: none; }
+.grants-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem .75rem; background: var(--raised); border: 1px solid var(--line-subtle); font-size: .875rem; }
+.grants-list .grant-meta { min-width: 0; flex: 1; }
+.grants-list .grant-meta strong { display: block; font-weight: 600; }
+.grants-list .grant-meta small { display: block; color: var(--muted); font-size: .78rem; }
+.grants-panel #grants-empty { margin: 0; font-size: .875rem; }
 #start.has-passkey #unlock-form button[type="submit"] { background: transparent; color: var(--fg); border-color: var(--line); }
 #start.has-passkey #unlock-form button[type="submit"]:hover { background: var(--hover); border-color: var(--hover-line); }
 #start label.light { font-size: .8125rem; }

@@ -3,7 +3,7 @@
 // system's light or dark setting (System), and so does every new device. /theme.js applies a kept choice
 // before first paint.
 
-export const THEME_KEY = "hidden-word:theme";
+export const THEME_KEY = "selah-vault:theme";
 
 /** A kept choice, or null for System. */
 export const storedTheme = (storage) => {

@@ -12,7 +12,7 @@ The worker (`src/`) is TypeScript and was typechecked with `tsc --noEmit`. tsrs 
 
 ## Decision
 
-`bun run check` runs `tsrs --noEmit -p tsconfig.json`, with tsrs pinned to `0.20.1-ts7.1.0-beta`. `bun run check:tsc` keeps the TypeScript 5.9 checker available as a fallback and cross-check.
+`mise run typecheck` runs both `tsrs --noEmit -p tsconfig.json` (pinned to `0.20.1-ts7.1.0-beta`) and `tsc --noEmit` (TypeScript 5.9) so every local and CI check gets fast feedback plus dual-checker verification.
 
 ## Consequences
 

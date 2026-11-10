@@ -1,6 +1,6 @@
 # selah-jev
 
-Stateless Cloudflare Worker that proxies Selah Vault's highlight-relevance requests to TypeSafe `jev-latest`. Deployed on its own; the vault Worker (`hidden-word`) does not call it.
+Stateless Cloudflare Worker that proxies Selah Vault's highlight-relevance requests to TypeSafe `jev-latest`. Deployed on its own; the `selah-vault` Worker does not call it.
 
 ## Request
 

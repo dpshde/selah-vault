@@ -8,19 +8,18 @@ Accepted
 
 ## Context
 
-Apps should be able to read and save a person's highlights without the person handing over their sync key, and without every app reimplementing sync, the merge rule and record bookkeeping. One small, clear contract is easier to adopt and to keep stable than several.
+Companion apps (`route.bible`, `Proofs` Web & iOS, and custom tools) need to read and write a person's library without ever handling first-party credentials and without maintaining divergent sync protocols. One narrow, standard authorization and sync contract is far easier to audit, adopt, and evolve than multiple ad-hoc flows.
 
 ## Decision
 
-External apps work with a library one way: a `/connect` grant and the highlights API (SPEC 4). The grant's scopes are `read` and `highlights:write`; the API is changes since a cursor, list and find, a grouped read, add (a verse or a range), recolor and delete, done in the reference grant client because the server can't read records.
+External apps interoperate with Selah Vault one way: **OAuth 2.1 Authorization Code + PKCE (`S256`)** via `/oauth/authorize` (`/connect`) and `/oauth/token` ([SPEC 2](../SPEC.md#2-connecting-an-app-oauth-21--pkce)), paired with the `/v2` event stream (`public/grant-client.js`, [docs/connect.md](../docs/connect.md)):
 
-- The vault's own devices sync through its server (SPEC 5).
-- `.jsonl` export and import are a person's own backup and restore, not an interop path.
-- `/unlock` (handing an app the whole key) is deprecated and kept working for the rest of 1.x.
-- `/save` links, the `/mcp` server and in-page WebMCP tools act inside the person's own library, with their own key or unlocked session. They're conveniences for that person, not a way for apps to interoperate.
+- `LibraryDO` enforces explicit scopes per event kind (`read`, `passages:write`, `highlights:write`, `notes:write`, `srs:write`) on 90-day revocable `sv2.<userId>.<secret>` tokens.
+- `GrantClient` hydrates cold clients from `GET /v2/bootstrap`, pulls incremental updates from `GET /v2/events?after=<seq>`, appends scoped events to `POST /v2/events`, and subscribes to live `poke` notifications over `/v2/ws`.
+- `.jsonl` export and import (`/v2/export`, `/v2/import`, `Library.toFile()`) are for user-controlled backup and restore, not app-to-app integration.
+- `/save` GET links and in-page WebMCP tools act inside the user's own signed-in browser session as direct user conveniences.
 
 ## Consequences
 
-- One short section of the spec tells an app everything it needs. A connected app needs HTTPS and the grant client, not the merge rule or file handling.
-- Access is scoped, expires after 90 days and can be revoked, unlike a handed-over key.
-- A library needs its server to reach a person's other devices; without it, a backup file moves by hand.
+- Every connected web, native iOS, and MCP client shares one standard OAuth 2.1 PKCE handshake and one `/v2` event contract.
+- Grants expire automatically after 90 days, cannot erase a library or inspect other grants, and can be revoked immediately by either the app (`POST /oauth/revoke`) or the user (`DELETE /v2/grants/:id`).

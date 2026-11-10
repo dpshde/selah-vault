@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Connect an app · Selah Vault</title>
+  <title>Sign in · Selah Vault</title>
   <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">
   <link rel="icon" href="/favicon.r2.ico" sizes="any">
   <link rel="apple-touch-icon" href="/apple-touch-icon.r2.png">
@@ -18,36 +18,45 @@
 <!-- route.bible's second grain layer (.monologue-grain): fixed over the page, dark only; see style.css. -->
 <div class="monologue-grain" aria-hidden="true"><div class="monologue-grain__tile"></div></div>
 <main>
-  <section id="bad" hidden>
-    <h1>Can't connect</h1>
-    <p class="lede">This link needs an app name and a valid address to return to.</p>
-  </section>
+  <section id="signin">
+    <h1>Vault</h1>
+    <p class="lede">Sign in to sync your passages, highlights, and notes across devices.</p>
 
-  <section id="pick" hidden>
-    <h1>Connect <span class="app-name"></span></h1>
-    <p class="lede">Unlock the library you want it to use.</p>
-    <button type="button" id="use-session" hidden></button>
-    <form id="unlock-form" autocomplete="on">
-      <label>Library <input name="username" autocomplete="username" value="Personal" required></label>
-      <label>Sync key <input name="password" type="password" autocomplete="current-password" required spellcheck="false"></label>
-      <button type="submit">Unlock</button>
-      <p class="error" role="alert"></p>
-    </form>
-    <button type="button" id="passkey-unlock" class="quiet" hidden>Unlock with passkey</button>
-    <details class="lost-key">
-      <summary>Lost your sync key?</summary>
-      <p>Nobody can recover it. Look in your password manager under this site's address, or open Selah Vault on a device that's still unlocked and open Sync from the ••• menu and choose Show sync key.</p>
-    </details>
-  </section>
-
-  <section id="consent" hidden>
-    <h1>Give <span class="app-name"></span> access to “<span id="consent-lib"></span>”?</h1>
-    <p class="lede">It will be able to read, change, and delete everything in this library. You'll return to <strong id="consent-dest"></strong>.</p>
-    <div class="row">
-      <button type="button" id="allow">Allow</button>
-      <button type="button" id="deny" class="quiet">Cancel</button>
+    <div class="auth-stack" id="auth-methods">
+      <button type="button" id="passkey-login" class="wide">Continue with Passkey</button>
+      <button type="button" id="apple-login" class="wide quiet auth-btn">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M16.37 12.63c.02 2.27 1.99 3.03 2.01 3.04-.02.05-.31 1.08-1.04 2.14-.63.92-1.29 1.84-2.32 1.86-1.01.02-1.34-.6-2.5-.6-1.16 0-1.53.58-2.48.62-1 .04-1.76-1-2.4-1.91-1.3-1.88-2.3-5.31-.96-7.64.66-1.16 1.85-1.89 3.14-1.91.98-.02 1.91.66 2.5.66.6 0 1.72-.82 2.9-.7.49.02 1.88.2 2.77 1.5-.07.05-1.65.96-1.62 2.94ZM14.47 7.11c.53-.64.88-1.53.79-2.42-.76.03-1.68.51-2.22 1.15-.49.56-.92 1.47-.8 2.34.85.07 1.71-.43 2.23-1.07Z"/></svg>
+        <span>Sign in with Apple</span>
+      </button>
     </div>
+
+    <p class="divider"><span>or continue with email</span></p>
+
+    <form id="email-send-form" autocomplete="on">
+      <label for="email-input">Email address
+        <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      </label>
+      <button type="submit" class="wide quiet">Continue with Email</button>
+    </form>
+
+    <form id="email-verify-form" autocomplete="off" hidden>
+      <p class="quiet-text" id="email-sent-note"></p>
+      <label for="otp-input">6-digit code
+        <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="123456" required>
+      </label>
+      <div class="row">
+        <button type="submit">Verify code</button>
+        <button type="button" id="email-back" class="quiet">Change email</button>
+      </div>
+    </form>
+
+    <p class="error" id="auth-error" role="alert"></p>
+    <p class="new-here" id="passkey-register-wrap">New here? <button type="button" id="passkey-register" class="link">Create a passkey</button></p>
   </section>
 </main>
+<footer class="shell-meta">
+  <button type="button" class="shell-link theme-toggle" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
+  <a class="shell-link" href="https://github.com/dpshde/selah-vault/blob/main/SPEC.md" target="_blank" rel="noopener">Contract</a>
+</footer>
 </body>
 </html>
