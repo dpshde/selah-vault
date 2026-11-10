@@ -27,43 +27,32 @@
     <p class="lede">Your highlights, on your devices, in any app.</p>
     <p class="note" id="start-note" role="status" hidden></p>
 
-    <button id="passkey-unlock" class="wide" type="button" hidden>Unlock with passkey</button>
-    <p class="divider" id="or-key" hidden><span>or use your sync key</span></p>
+    <div class="auth-stack">
+      <button id="passkey-login" class="wide" type="button">Continue with Passkey</button>
+      <button id="apple-login" class="wide quiet auth-btn" type="button">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M16.37 12.63c.02 2.27 1.99 3.03 2.01 3.04-.02.05-.31 1.08-1.04 2.14-.63.92-1.29 1.84-2.32 1.86-1.01.02-1.34-.6-2.5-.6-1.16 0-1.53.58-2.48.62-1 .04-1.76-1-2.4-1.91-1.3-1.88-2.3-5.31-.96-7.64.66-1.16 1.85-1.89 3.14-1.91.98-.02 1.91.66 2.5.66.6 0 1.72-.82 2.9-.7.49.02 1.88.2 2.77 1.5-.07.05-1.65.96-1.62 2.94ZM14.47 7.11c.53-.64.88-1.53.79-2.42-.76.03-1.68.51-2.22 1.15-.49.56-.92 1.47-.8 2.34.85.07 1.71-.43 2.23-1.07Z"/></svg>
+        <span>Sign in with Apple</span>
+      </button>
+    </div>
 
-    <form id="unlock-form" autocomplete="on">
-      <!-- The library name stays before the key: password managers pair a username field with the
-           password field after it, so 1Password and iCloud Keychain fill both. -->
-      <label for="username" class="light">Library name (optional) <input id="username" name="username" autocomplete="username" value="Personal"></label>
-      <label for="password">Sync key <input id="password" name="password" type="password" autocomplete="current-password" placeholder="XXXX-XXXX-…" required spellcheck="false" autocapitalize="characters"></label>
-      <button type="submit" class="wide">Unlock</button>
-      <p class="error" role="alert"></p>
+    <p class="divider" id="or-email"><span>or continue with email</span></p>
+
+    <form id="email-send-form" autocomplete="on">
+      <label for="email-input">Email address <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
+      <button type="submit" class="wide quiet">Continue with Email</button>
+    </form>
+
+    <form id="email-verify-form" autocomplete="off" hidden>
+      <p class="quiet-text" id="email-sent-note"></p>
+      <label for="otp-input">6-digit code <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
+      <div class="row">
+        <button type="submit">Verify code</button>
+        <button type="button" id="email-back" class="quiet">Change email</button>
+      </div>
     </form>
 
     <p class="error" id="start-error" role="alert"></p>
-    <p class="new-here">New here? <button id="create" class="link" type="button">Create a library</button></p>
-    <details class="lost-key">
-      <summary>Lost your sync key?</summary>
-      <p>Nobody can recover it. Your library is encrypted with the key, and Selah Vault never keeps a copy.</p>
-      <p>Look in your password manager under this site's address.<span id="lost-passkey" hidden> If you added a passkey, try Unlock with passkey.</span> On a device that's still unlocked, open Sync from the ••• menu and choose Show sync key.</p>
-      <p>If none of that works, create a new library. If you saved a file from Backup, its Import brings your highlights back.</p>
-    </details>
-  </section>
-
-  <section id="created" hidden>
-    <h1>Save your sync key</h1>
-    <p class="lede">This key is the only way into your library. Nobody can reset or recover it, and anyone who has it can read your highlights. Save it in your password manager now.</p>
-    <div class="key-box">
-      <code id="new-key" data-1p-ignore></code>
-      <button type="button" class="quiet" id="copy">Copy</button>
-    </div>
-    <form id="save-form" method="get" action="/" autocomplete="on">
-      <label for="new-username">Library <input id="new-username" name="new-username" autocomplete="username" value="Personal" required></label>
-      <label for="new-password">Paste your sync key <input id="new-password" name="new-password" type="password" autocomplete="new-password" placeholder="Paste the key above" required spellcheck="false" autocapitalize="characters" minlength="28" maxlength="34" passwordrules="required: upper; required: digit; allowed: [-];"></label>
-      <p class="error" role="alert"></p>
-      <div class="row" id="continue-row">
-        <button type="submit">Continue</button>
-      </div>
-    </form>
+    <p class="new-here"><span id="passkey-create-wrap">New here? <button id="create-passkey" class="link" type="button">Create a passkey</button> · </span><button id="open-offline" class="link" type="button">Use offline on this device</button></p>
   </section>
 
   <section id="main" hidden>
@@ -86,7 +75,7 @@
     </header>
     <p id="flash" role="status"></p>
     <div id="passkey-offer" class="offer" hidden>
-      <p>Add a passkey to unlock this library without typing the key in other browsers on this site.</p>
+      <p>Add a passkey for one-tap sign-in on this device.</p>
       <div class="row">
         <button type="button" class="quiet" id="offer-passkey">Add a passkey</button>
         <button type="button" class="link" id="skip-passkey">Not now</button>
@@ -195,15 +184,15 @@
     </header>
     <div class="panel-body">
       <div class="row sync-actions">
-        <button type="button" class="quiet" id="show-key" aria-controls="key-reveal" aria-expanded="false">Show sync key</button>
         <button type="button" id="add-passkey">Add passkey</button>
       </div>
-      <div class="key-box" id="key-reveal" hidden>
-        <code id="key-text" data-1p-ignore></code>
-        <button type="button" class="icon" id="copy-key" aria-label="Copy sync key" title="Copy sync key"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-      </div>
       <p class="status-line" id="access-note" role="status"></p>
-      <label class="check"><input type="checkbox" role="switch" id="use-server" aria-checked="true"> <span>Across devices<small>Encrypted on this device.</small></span></label>
+      <label class="check"><input type="checkbox" role="switch" id="use-server" aria-checked="true"> <span>Across devices<small>Synced to your Selah Vault account.</small></span></label>
+      <div class="grants-panel" id="grants-section">
+        <h2 class="subhead">Connected apps</h2>
+        <ul id="grants-list" class="grants-list"></ul>
+        <p class="quiet-text" id="grants-empty">No connected apps.</p>
+      </div>
       <details id="danger">
         <summary>Danger zone</summary>
         <p class="quiet-text">Removes this library from the server and this device.</p>

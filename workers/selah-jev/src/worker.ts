@@ -1,6 +1,6 @@
 // selah-jev: a stateless proxy from the vault client to TypeSafe Jev (jev-latest).
 // Accepts only the relevance request shape; never logs the API key; CORS only for the vault.
-// Deployed on its own (see wrangler.toml); the hidden-word Worker is untouched.
+// Deployed on its own (see wrangler.toml); the selah-vault Worker is untouched.
 
 export interface Env {
   TYPESAFE_API_KEY: string;
@@ -26,8 +26,8 @@ export const VAULT_ORIGINS = new Set([
   "http://127.0.0.1:8787",
 ]);
 
-/** Preview versions of the vault Worker, e.g. https://1a2b3c4d-hidden-word.dpshade.workers.dev. */
-const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+-hidden-word\.dpshade\.workers\.dev$/;
+/** Preview versions of the vault Worker, e.g. https://1a2b3c4d-selah-vault.dpshade.workers.dev. */
+const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+-selah-vault\.dpshade\.workers\.dev$/;
 
 export const allowedOrigin = (origin: string | null): boolean =>
   !!origin && (VAULT_ORIGINS.has(origin) || PREVIEW_ORIGIN.test(origin));

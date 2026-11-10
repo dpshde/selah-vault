@@ -1,5 +1,4 @@
-# Tests and typecheck on every push to main and every pull request. Deploys stay manual
-# (`bun run deploy` from a machine logged in to Cloudflare), so this needs no secrets.
+# Continuous Integration: runs every quality gate via mise on pushes to main and PRs.
 name: CI
 
 on:
@@ -15,14 +14,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  check:
+    name: Hygiene, Typecheck, Test & Dry-Run
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@v2
         with:
-          bun-version: 1.4.2 # keep in step with mise.toml
-      - run: bun install --frozen-lockfile
-      - run: bun test
-      - run: bun run check
+          install: true
+          cache: true
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: mise run install
+
+      - name: Run repository hygiene checks
+        run: mise run hygiene
+
+      - name: Typecheck (tsrs + tsc)
+        run: mise run typecheck
+
+      - name: Run test suite
+        run: mise run test
+
+      - name: Dry-run selah-vault Worker bundle
+        run: mise run dry-run
+
+      - name: Dry-run selah-jev Worker bundle
+        run: mise run jev:dry-run

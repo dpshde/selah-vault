@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { Library, formatKey, newKey, now, palette } from "../public/sync.js";
+import { Library, now, palette } from "../public/sync.js";
 import { highlightRecord } from "../public/ranges.js";
 import {
   ADD_HIGHLIGHT,
@@ -18,7 +18,7 @@ const capitalized = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 const colorName = (c: any) => c.name || (c.builtIn ? capitalized(c.id) : "Color");
 
 let library: any;
-let keyText: string;
+let tokenText: string;
 let flashes: Array<{ text: string; action?: { label: string; run: () => unknown } }>;
 
 /** The same wiring app.js gives the tools, over a real Library. */
@@ -41,8 +41,8 @@ const tools = (open = true) => Object.fromEntries((buildSelahVaultTools(deps(ope
 const exec = (name: string, input: any = {}, open = true) => tools(open)[name]!.execute(input, { signal: new AbortController().signal });
 
 beforeEach(async () => {
-  keyText = await formatKey(newKey());
-  library = await Library.open({ keyText });
+  tokenText = "sv2.u_0123456789abcdef012345.secret_0123456789abcdef0123456789abcdef0123";
+  library = await Library.open({ userId: "u_0123456789abcdef012345", token: tokenText });
   flashes = [];
 });
 
@@ -72,7 +72,7 @@ test("tool definitions match docs/webmcp/schema.json and Chrome's budgets", () =
   }
 });
 
-test("no tool output ever holds the sync key", async () => {
+test("no tool output ever holds a session or OAuth token", async () => {
   await exec(ADD_HIGHLIGHT, { reference: "John 3:16" });
   const outputs = [
     await exec(FIND_HIGHLIGHTS),
@@ -80,19 +80,18 @@ test("no tool output ever holds the sync key", async () => {
     await exec(DELETE_HIGHLIGHTS, { reference: "Rom 5:4" }),
     await exec(FIND_HIGHLIGHTS, {}, false),
   ];
-  const raw = keyText.replace(/-/g, "");
   for (const out of outputs) {
     const text = JSON.stringify(out);
-    expect(text).not.toContain(keyText);
-    expect(text).not.toContain(raw);
+    expect(text).not.toContain(tokenText);
+    expect(text).not.toContain("sv2.");
   }
 });
 
-test("every tool asks for an unlock when no library is open", async () => {
+test("every tool asks for sign-in when no library is open", async () => {
   for (const name of [FIND_HIGHLIGHTS, ADD_HIGHLIGHT, DELETE_HIGHLIGHTS]) {
     const out = await exec(name, { reference: "John 3:16" }, false);
     expect(out).toMatchObject({ code: "LIBRARY_LOCKED", retryable: false });
-    expect(out.suggestion).toContain("Never ask them to share the key");
+    expect(out.suggestion).toContain("Never ask them to share");
   }
 });
 

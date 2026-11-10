@@ -1,13 +1,23 @@
 import {
-  COLORS, Library, KeyError, newKey, formatKey, parseKey, now, palette, topColor, parseJsonl, saveSlot, openSlot,
-  serverTransport,
+  COLORS, Library, now, palette, topColor, parseJsonl, serverTransport,
 } from "./sync.js";
 import { labelRef, compareRefs } from "./refs.js";
 import { editRun, highlightRecord, tombstone, groupRuns } from "./ranges.js";
 import { readPassage } from "./passage.js";
 import { MODES, RANK_MODES, LEGACY_TOPIC_MODE, LEGACY_RELATED_MODES, JEV_MODES, groupList, startsOpen } from "./groups.js";
 import { definePassageInput, defineScripturePassage } from "./vendor/scripture-inline.js";
-import { createPasskeyPrf, getPasskeyPrf, passkeysAvailable, cancelled } from "./passkey.js";
+import {
+  cancelled,
+  fetchSession,
+  loginWithPasskey,
+  passkeysAvailable,
+  registerPasskey,
+  sendEmailCode,
+  signInWithApple,
+  signOutSession,
+  verifyEmailCode,
+} from "./passkey.js";
+import { clientInfo } from "./grants.js";
 import { setupThemeToggle } from "./theme-toggle.js";
 import { registerSelahVaultTools } from "./webmcp.js";
 import { armDelete } from "./confirm.js";
@@ -29,26 +39,21 @@ import {
 } from "./relevance.js";
 
 const $ = (sel) => document.querySelector(sel);
-const SESSION = "hidden-word:session";
-const CREATED = "hidden-word:created";
-const SAVE_LINK = "hidden-word:save-link";
+const SESSION = "selah-vault:session";
+const SAVE_LINK = "selah-vault:save-link";
 // How this device sorts the list (date / genre / related): a display choice, not synced.
-// The Related passage, Closest|Surprising order, and topic-search phrase are never synced — only the mode button is.
-const GROUP_BY = "hidden-word:group-by";
-const RELATED_SORT = "hidden-word:related-sort";
-// A library's name as this device last saw it, for the unlock form and before the library has synced.
-// The name itself syncs as a `library` record (SPEC.md 1.5): library.name is the one to show.
-const nameKey = (lib) => `hidden-word:name:${lib}`;
+const GROUP_BY = "selah-vault:group-by";
+const RELATED_SORT = "selah-vault:related-sort";
+const nameKey = (lib) => `selah-vault:name:${lib}`;
 const store = {
-  load: (lib) => JSON.parse(localStorage.getItem(`hidden-word:${lib}`) ?? "null"),
-  save: (lib, state) => localStorage.setItem(`hidden-word:${lib}`, JSON.stringify(state)),
-  clear: (lib) => localStorage.removeItem(`hidden-word:${lib}`),
+  load: (lib) => JSON.parse(localStorage.getItem(`selah-vault:${lib}`) ?? "null"),
+  save: (lib, state) => localStorage.setItem(`selah-vault:${lib}`, JSON.stringify(state)),
+  clear: (lib) => localStorage.removeItem(`selah-vault:${lib}`),
 };
-// How this browser syncs each library. Not synced itself: each device chooses.
-const settingsKey = (lib) => `hidden-word:settings:${lib}`;
+const settingsKey = (lib) => `selah-vault:settings:${lib}`;
 const settings = (lib) => ({ server: true, ...JSON.parse(localStorage.getItem(settingsKey(lib)) ?? "{}") });
 const saveSettings = (lib, s) => localStorage.setItem(settingsKey(lib), JSON.stringify(s));
-const filtersKey = (lib) => `hidden-word:filters:${lib}`;
+const filtersKey = (lib) => `selah-vault:filters:${lib}`;
 
 let library = null;
 let colors = palette([]);
@@ -108,10 +113,14 @@ function paint(el, id) {
   el.style.background = c.builtIn ? "" : c.hex;
 }
 
-// ---- unlocking, creating, locking
+// ---- signing in, offline local mode, signing out
 
-async function enter(keyText, given) {
-  library = await Library.open({ keyText, name: given, store });
+let signedInUser = null;
+let connected = null;
+
+async function enter({ id, name: given = "Personal", online = true } = {}) {
+  signedInUser = online ? { id, name: given } : null;
+  library = await Library.open({ userId: id, name: given, store });
   library.localName = localStorage.getItem(nameKey(library.lib)) || given;
   try {
     const saved = JSON.parse(localStorage.getItem(filtersKey(library.lib)) ?? "[]");
@@ -131,147 +140,124 @@ async function enter(keyText, given) {
   render();
   await saveFromLink();
   await connect();
-  // Only now has every transport had its chance to bring a synced name (see showName).
   connected = library;
   showName();
 }
 
-/** Syncs the open library through this site's server, unless this browser turned that off. */
 async function connect() {
   renderSync();
-  await library.use(settings(library.lib).server ? [serverTransport()] : []);
+  const useRemote = Boolean(signedInUser && settings(library.lib).server);
+  await library.use(useRemote ? [serverTransport()] : []);
 }
 
-/**
- * Folder sync is gone (decisions/one-way-to-interoperate.md). Browsers that used it kept only the
- * chosen folders' handles, in an IndexedDB database of their own ("hidden-word"); libraries live
- * in localStorage and on the server. Drop that database once, quietly: nothing in it is a record.
- */
-function forgetFolderHandles() {
-  try {
-    globalThis.indexedDB?.deleteDatabase("hidden-word");
-  } catch {
-    // Private modes may refuse IndexedDB; there's nothing to clean up there.
-  }
-}
-
-/**
- * Shows the library's name, synced from other devices, and remembers it here. A library with no
- * name yet takes this device's, once synced (Library.adoptName), so a typed name never renames one.
- */
-let connected = null;
 function showName() {
   if (!library) return;
   const name = library.name;
   if (document.activeElement !== $("#lib-name") && $("#lib-name").textContent !== name) $("#lib-name").textContent = name;
   if (localStorage.getItem(nameKey(library.lib)) !== name) localStorage.setItem(nameKey(library.lib), name);
-  const session = JSON.parse(localStorage.getItem(SESSION) ?? "null");
-  if (session?.key !== library.keyText || session.name !== name) localStorage.setItem(SESSION, JSON.stringify({ key: library.keyText, name }));
+  localStorage.setItem(SESSION, JSON.stringify({ id: library.lib, name, online: !!signedInUser }));
   if (connected === library && library.syncedName === null && ["synced", "local"].includes(library.status.state)) library.adoptName();
 }
 
-function lock() {
+async function lock() {
   library?.forget();
   library = null;
+  signedInUser = null;
   localStorage.removeItem(SESSION);
+  await signOutSession();
   $("#menu").open = false;
   $("#passkey-offer").hidden = true;
-  hideKey();
   document.querySelectorAll("form").forEach((f) => f.reset());
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
   show("start");
 }
 
-let unlocking = false;
+let pendingEmail = "";
 
-$("#unlock-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (unlocking) return;
-  const form = new FormData(e.target);
-  unlocking = true;
-  try {
-    await enter(form.get("password"), form.get("username").trim() || "Personal");
-  } catch (error) {
-    errorIn(e.target, error instanceof KeyError ? "That sync key has a typo. Check it and try again." : String(error.message));
-  } finally {
-    unlocking = false;
-  }
-});
-
-// Unlock as soon as the field holds a whole, valid key, so a password manager's fill (1Password,
-// iCloud Keychain, Chrome) signs straight in without a click. The check byte means a key still
-// being typed, or one with a typo, never submits; only a complete key does.
-for (const type of ["input", "change"]) {
-  $("#password").addEventListener(type, async () => {
-    const value = $("#password").value;
-    if (unlocking || value.replace(/[\s-]/g, "").length !== 28) return;
-    try {
-      await parseKey(value);
-    } catch {
-      return;
-    }
-    if ($("#password").value === value && !$("#start").hidden) $("#unlock-form").requestSubmit();
-  });
-}
-
-$("#passkey-unlock").addEventListener("click", async () => {
+$("#passkey-login")?.addEventListener("click", async () => {
   $("#start-error").textContent = "";
   try {
-    const slot = await openSlot({ prf: await getPasskeyPrf() });
-    if (!slot) {
-      $("#start-error").textContent = "That passkey isn't linked to a library. Unlock with your sync key, then add the passkey.";
-      return;
-    }
-    await enter(slot.key, slot.name);
+    const res = await loginWithPasskey();
+    const user = res?.user ?? (await fetchSession());
+    await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
   } catch (error) {
     if (!cancelled(error)) $("#start-error").textContent = error.message;
   }
 });
 
-// The new key is shown as text, and the person pastes it into the form's password field.
-// Password managers (Safari, iOS, 1Password, Chrome) offer to save only a password the person
-// entered; one the page filled in by itself got no offer in testing, even with input events.
-// Pasting it also proves the key was copied before the screen goes away.
-let newKeyText = "";
-const sameKey = (text) => {
-  const norm = (t) => t.toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
-  return norm(text) === norm(newKeyText);
-};
-
-$("#create").addEventListener("click", async () => {
-  const form = $("#save-form");
-  newKeyText = await formatKey(newKey());
-  $("#new-key").textContent = newKeyText;
-  form.elements["new-password"].value = "";
-  errorIn(form, "");
-  show("created");
-});
-
-$("#new-password").addEventListener("input", () => errorIn($("#save-form"), ""));
-
-$("#copy").addEventListener("click", async () => {
-  await navigator.clipboard.writeText(newKeyText);
-  $("#copy").textContent = "Copied";
-  setTimeout(() => ($("#copy").textContent = "Copy"), 1500);
-});
-
-// Password managers (1Password, Chrome, Safari) offer to save a sign-up when its form is really
-// submitted, straight from the person's tap, and the page navigates. So Continue does only that:
-// the form submits as a GET to "/" and the page reloads into the new library. iOS in particular
-// offers nothing for a submission made later by script, which is why the passkey is offered on
-// the next screen instead of before submitting. The formdata handler empties the submission, so
-// the key never leaves the device.
-$("#save-form").addEventListener("submit", (e) => {
-  const form = e.target;
-  if (!sameKey(form.elements["new-password"].value)) {
-    e.preventDefault();
-    return errorIn(form, "That isn't the key above. Copy it and paste it here.");
+$("#create-passkey")?.addEventListener("click", async () => {
+  $("#start-error").textContent = "";
+  try {
+    const res = await registerPasskey({ name: "Personal" });
+    const user = res?.user ?? (await fetchSession());
+    await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
+    flash("Library ready.");
+  } catch (error) {
+    if (!cancelled(error)) $("#start-error").textContent = error.message;
   }
-  const name = form.elements["new-username"].value.trim() || "Personal";
-  localStorage.setItem(SESSION, JSON.stringify({ key: newKeyText, name }));
-  sessionStorage.setItem(CREATED, "1");
 });
-$("#save-form").addEventListener("formdata", (e) => {
-  for (const name of [...e.formData.keys()]) e.formData.delete(name);
+
+$("#email-send-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#start-error").textContent = "";
+  const email = String(new FormData(e.target).get("email") ?? "").trim();
+  if (!email) return;
+  try {
+    await sendEmailCode(email);
+    pendingEmail = email;
+    $("#email-sent-note").textContent = `Enter the 6-digit code sent to ${email}.`;
+    $("#email-send-form").hidden = true;
+    $("#email-verify-form").hidden = false;
+    $("#otp-input")?.focus();
+  } catch (error) {
+    $("#start-error").textContent = error.message;
+  }
+});
+
+$("#email-back")?.addEventListener("click", () => {
+  $("#start-error").textContent = "";
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  $("#email-input")?.focus();
+});
+
+$("#email-verify-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#start-error").textContent = "";
+  const code = String(new FormData(e.target).get("code") ?? "").trim();
+  try {
+    const res = await verifyEmailCode(pendingEmail, code);
+    const user = res?.user ?? (await fetchSession());
+    await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
+    if (passkeysAvailable()) $("#passkey-offer").hidden = false;
+  } catch (error) {
+    $("#start-error").textContent = error.message;
+  }
+});
+
+$("#apple-login")?.addEventListener("click", async () => {
+  $("#start-error").textContent = "";
+  try {
+    if (globalThis.AppleID?.auth) {
+      const resp = await globalThis.AppleID.auth.signIn();
+      const idToken = resp?.authorization?.id_token;
+      if (!idToken) throw new Error("Apple did not return an identity token.");
+      const fullName = [resp?.user?.name?.firstName, resp?.user?.name?.lastName].filter(Boolean).join(" ").trim();
+      const res = await signInWithApple(idToken, { name: fullName || undefined });
+      const user = res?.user ?? (await fetchSession());
+      await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
+      return;
+    }
+    location.assign("/unlock");
+  } catch (error) {
+    if (!cancelled(error)) $("#start-error").textContent = error.message;
+  }
+});
+
+$("#open-offline")?.addEventListener("click", async () => {
+  $("#start-error").textContent = "";
+  await enter({ id: "offline", name: "Personal", online: false });
 });
 
 // ---- highlights
@@ -1126,8 +1112,8 @@ refField.addEventListener("input", () => {
   const form = $("#add");
   const raw = refText(refField);
   if (!String(raw).trim()) errorIn(form, "");
-  // Leave the old ranked list immediately when the passage changes; no network until commit.
-  rankGeneration++;
+  // Leave the old ranked list immediately when the passage changes.
+  rankGeneration++; // no network until commit
   rankOrder = [];
   rankFailed = false;
   beginRankPaint({ resetUser: true });
@@ -1504,7 +1490,7 @@ const themeNow = setupThemeToggle(document.querySelectorAll(".theme-toggle"), {
 // The verse-text key is public (it's served at /config.json). It's kept on this device too, so the
 // book button shows on every load even when /config.json is slow, rate limited or offline; a failed
 // fetch is retried once.
-const YV_KEY = "hidden-word:yv-key";
+const YV_KEY = "selah-vault:yv-key";
 function useVerseKey(yvpPublicAppKey) {
   if (!yvpPublicAppKey || verseText.key === yvpPublicAppKey) return;
   if (!verseText.key) {
@@ -1835,13 +1821,65 @@ $("#add-color").addEventListener("submit", async (e) => {
   e.target.name.value = "";
 });
 
-// ---- sync choices
+// ---- sync choices & connected apps
+
+async function loadGrants() {
+  const list = $("#grants-list");
+  const empty = $("#grants-empty");
+  if (!list || !empty) return;
+  if (!signedInUser) {
+    list.replaceChildren();
+    empty.hidden = false;
+    empty.textContent = "Sign in to manage connected apps.";
+    return;
+  }
+  try {
+    const res = await fetch("/v2/grants", { credentials: "same-origin", cache: "no-store" });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const grants = Array.isArray(data?.grants) ? data.grants : Array.isArray(data) ? data : [];
+    list.replaceChildren(
+      ...grants.map((g) => {
+        const li = document.createElement("li");
+        const meta = document.createElement("div");
+        meta.className = "grant-meta";
+        const info = clientInfo(g.client_id || g.clientId || "", g.client_id || g.clientId || "");
+        const title = document.createElement("strong");
+        title.textContent = info.name || g.client_id || g.clientId || "Connected app";
+        const sub = document.createElement("small");
+        const scopes = Array.isArray(g.scopes) ? g.scopes.join(" · ") : String(g.scope || "read");
+        sub.textContent = scopes;
+        meta.append(title, sub);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "quiet danger";
+        btn.textContent = "Disconnect";
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          const del = await fetch(`/v2/grants/${encodeURIComponent(g.id)}`, { method: "DELETE", credentials: "same-origin" });
+          if (del.ok) loadGrants();
+          else btn.disabled = false;
+        });
+        li.append(meta, btn);
+        return li;
+      }),
+    );
+    empty.hidden = grants.length > 0;
+    empty.textContent = "No connected apps.";
+  } catch {
+    list.replaceChildren();
+    empty.hidden = false;
+    empty.textContent = "No connected apps.";
+  }
+}
 
 function renderSync() {
   if (!library) return;
-  const on = settings(library.lib).server;
+  const on = Boolean(signedInUser && settings(library.lib).server);
   $("#use-server").checked = on;
+  $("#use-server").disabled = !signedInUser;
   $("#use-server").setAttribute("aria-checked", String(on));
+  loadGrants();
 }
 
 $("#use-server").addEventListener("change", async (e) => {
@@ -1851,7 +1889,7 @@ $("#use-server").addEventListener("change", async (e) => {
   await connect();
 });
 
-for (const back of document.querySelectorAll(".back")) back.addEventListener("click", () => (hideKey(), show("main"), render()));
+for (const back of document.querySelectorAll(".back")) back.addEventListener("click", () => (show("main"), render()));
 
 // ---- the library's name, edited in place
 
@@ -1921,13 +1959,13 @@ function menuAction(sel, fn) {
   }
 }
 
-menuAction("#open-sync", () => (renderSync(), hideKey(), ($("#access-note").textContent = ""), show("sync")));
+menuAction("#open-sync", () => (renderSync(), ($("#access-note").textContent = ""), show("sync")));
 menuAction("#open-colors", () => (renderColors(), show("colors")));
 menuAction("#open-backup", () => (($("#backup-note").textContent = ""), show("backup")));
 
 /** Runs a button on a settings screen, saying how it went in that screen's status line. */
 function screenAction(id, note, fn) {
-  $(id).addEventListener("click", async () => {
+  $(id)?.addEventListener("click", async () => {
     try {
       const said = await fn();
       if (said) $(note).textContent = said;
@@ -1937,67 +1975,31 @@ function screenAction(id, note, fn) {
   });
 }
 
-/** Creates a passkey that unlocks the open library, and says so. */
 async function addPasskey() {
-  const prf = await createPasskeyPrf(library.name);
-  await saveSlot({ prf, keyText: library.keyText, name: library.name });
+  await registerPasskey({ name: library?.name || "Personal" });
   $("#passkey-offer").hidden = true;
-  return "Passkey added. Use it to unlock this library in any browser.";
+  return "Passkey added. Use it to sign in on any device.";
 }
 
 screenAction("#add-passkey", "#access-note", addPasskey);
 
-// Offered once, right after creating a library. Declining or cancelling costs nothing: the Sync
-// screen has "Add passkey" too.
-$("#offer-passkey").addEventListener("click", async () => {
+$("#offer-passkey")?.addEventListener("click", async () => {
   try {
     flash(await addPasskey());
   } catch (error) {
     if (!cancelled(error)) flash(error.message);
   }
 });
-$("#skip-passkey").addEventListener("click", () => ($("#passkey-offer").hidden = true));
+$("#skip-passkey")?.addEventListener("click", () => ($("#passkey-offer").hidden = true));
 
-// The key shows on the Sync screen until hidden again or the screen is left.
-const COPY_KEY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-const COPIED_KEY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
-let copyKeyTimer;
-function resetCopyKeyButton() {
-  clearTimeout(copyKeyTimer);
-  const btn = $("#copy-key");
-  if (!btn) return;
-  btn.innerHTML = COPY_KEY_ICON;
-  btn.setAttribute("aria-label", "Copy sync key");
-  btn.title = "Copy sync key";
-}
-function hideKey() {
-  resetCopyKeyButton();
-  $("#key-reveal").hidden = true;
-  $("#key-text").textContent = "";
-  $("#show-key").textContent = "Show sync key";
-  $("#show-key").setAttribute("aria-expanded", "false");
-}
-$("#show-key").addEventListener("click", () => {
-  if (!$("#key-reveal").hidden) return hideKey();
-  $("#key-text").textContent = library.keyText;
-  $("#key-reveal").hidden = false;
-  $("#show-key").textContent = "Hide sync key";
-  $("#show-key").setAttribute("aria-expanded", "true");
-});
-$("#copy-key").addEventListener("click", async () => {
-  if (!library) return;
-  await navigator.clipboard.writeText(library.keyText);
-  const btn = $("#copy-key");
-  btn.innerHTML = COPIED_KEY_ICON;
-  btn.setAttribute("aria-label", "Copied");
-  btn.title = "Copied";
-  clearTimeout(copyKeyTimer);
-  copyKeyTimer = setTimeout(resetCopyKeyButton, 1500);
-});
-
-screenAction("#export", "#backup-note", () => {
+screenAction("#export", "#backup-note", async () => {
+  let content = library.toFile();
+  if (signedInUser) {
+    const res = await fetch("/v2/export", { credentials: "same-origin" }).catch(() => null);
+    if (res?.ok) content = await res.text();
+  }
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([library.toFile()], { type: "application/x-ndjson" }));
+  a.href = URL.createObjectURL(new Blob([content], { type: "application/x-ndjson" }));
   a.download = `selah-vault-${new Date().toISOString().slice(0, 10)}.jsonl`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -2012,10 +2014,24 @@ $("#import-file").addEventListener("change", async (e) => {
   if (!file) return;
   try {
     const text = await file.text();
-    const records = parseJsonl(text);
-    const changed = await library.merge(records);
-    const older = records.length - changed;
-    $("#backup-note").textContent = `Imported ${changed} ${changed === 1 ? "record" : "records"}${older ? ` (${older} unchanged: you had them, or newer)` : ""}.`;
+    if (signedInUser) {
+      const res = await fetch("/v2/import", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/x-ndjson" },
+        body: text,
+      }).catch(() => null);
+      if (res?.ok) {
+        const out = await res.json().catch(() => ({}));
+        await library.sync();
+        $("#backup-note").textContent = `Imported ${out.accepted ?? 0} ${out.accepted === 1 ? "event" : "events"}.`;
+        return;
+      }
+    }
+    const entries = parseJsonl(text);
+    const changed = await library.merge(entries);
+    const older = entries.length - changed;
+    $("#backup-note").textContent = `Imported ${changed} ${changed === 1 ? "entry" : "entries"}${older ? ` (${older} already present)` : ""}.`;
   } catch (error) {
     $("#backup-note").textContent = `Couldn't import that file: ${error.message}`;
   }
@@ -2024,13 +2040,14 @@ $("#import-file").addEventListener("change", async (e) => {
 menuAction("#lock", lock);
 
 $("#erase").addEventListener("click", async () => {
-  const ok = confirm("Erase this library from the server and this device? A device that still has it will put it back when it syncs.");
+  const ok = confirm("Erase this library from the server and this device?");
   if (!ok) return;
+  const id = library.lib;
   await library.erase();
-  localStorage.removeItem(settingsKey(library.lib));
-  localStorage.removeItem(nameKey(library.lib));
+  localStorage.removeItem(settingsKey(id));
+  localStorage.removeItem(nameKey(id));
   $("#danger").open = false;
-  lock();
+  await lock();
 });
 
 // ---- boot
@@ -2041,49 +2058,30 @@ setInterval(() => document.visibilityState === "visible" && library?.sync(), 30_
 
 async function boot() {
   loadConfig();
-  forgetFolderHandles();
-  // With passkeys, unlocking with one is the main way in and the key form is the fallback.
-  if (passkeysAvailable()) {
-    $("#passkey-unlock").hidden = false;
-    $("#or-key").hidden = false;
-    $("#start").classList.add("has-passkey");
-    $("#lost-passkey").hidden = false;
+  if (!passkeysAvailable()) {
+    if ($("#passkey-login")) $("#passkey-login").hidden = true;
+    if ($("#passkey-create-wrap")) $("#passkey-create-wrap").hidden = true;
+    if ($("#add-passkey")) $("#add-passkey").hidden = true;
   }
   const request = takeSaveLink();
   if (request) {
     const found = readPassage(request.ref);
-    $("#start-note").textContent = found.error ? "Unlock your library to save this verse." : `Unlock your library to save ${found.label}.`;
+    $("#start-note").textContent = found.error ? "Sign in to save this verse." : `Sign in to save ${found.label}.`;
     $("#start-note").hidden = false;
   }
-  // The new-library form submits to "/?"; tidy the address it leaves behind.
-  if (location.href.endsWith("?")) history.replaceState(null, "", location.pathname);
-  // A link like /#k=XXXX-…&name=Personal fills in the unlock form. The fragment never reaches the server.
-  const link = new URLSearchParams(location.hash.slice(1));
-  if (link.get("k")) {
-    $("#unlock-form").password.value = link.get("k");
-    if (link.get("name")) $("#unlock-form").username.value = link.get("name");
-    history.replaceState(null, "", location.pathname);
+  const user = await fetchSession();
+  if (user) {
+    await enter({ id: user.id, name: user.name || "Personal", online: true });
+    return;
   }
-  const session = JSON.parse(localStorage.getItem(SESSION) ?? "null");
-  if (session) {
-    try {
-      await enter(session.key, session.name);
-      if (sessionStorage.getItem(CREATED)) {
-        sessionStorage.removeItem(CREATED);
-        // A verse saved from a link has already said so, with its Undo.
-        if (!$("#flash").hasChildNodes()) flash("Library ready.");
-        $("#passkey-offer").hidden = !passkeysAvailable();
-      }
-      return;
-    } catch {
-      localStorage.removeItem(SESSION);
-    }
+  const saved = JSON.parse(localStorage.getItem(SESSION) ?? "null");
+  if (saved?.id && saved.online === false) {
+    await enter({ id: saved.id, name: saved.name || "Personal", online: false });
+    return;
   }
   show("start");
 }
 
-// In-page tools for browser agents (public/webmcp.js). They act on the open library only, never see
-// the sync key, and do nothing in browsers without WebMCP.
 registerSelahVaultTools({ library: () => library, colors: () => colors, colorName, highlight, flash });
 
 boot();

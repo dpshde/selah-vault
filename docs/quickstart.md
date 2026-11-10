@@ -1,143 +1,73 @@
-# Quick start: sync with a Selah Vault server
+# Quick Start: Sync with Selah Vault v2
 
-Connecting an app to someone's library? Use a grant instead ([SPEC 4](../SPEC.md#4-connecting-an-app), [docs/connect.md](connect.md)): your app never holds the sync key. This page is for a full client of your own, one of the person's devices.
+Building a connected app (`route.bible`, `Proofs`, or a custom tool)? Start with [docs/connect.md](connect.md) to obtain a scoped OAuth 2.1 `sv2.<userId>.<secret>` token. This guide shows the `/v2` event-stream sync loop underneath `public/sync.js` and `public/grant-client.js`.
 
-Five steps from a sync key to a synced highlight, using the test-vector key from [SPEC.md section 10](../SPEC.md#10-test-vectors). Every value below is real: check your code against it.
+## 1. Authenticate (`sv2.<userId>.<secret>`)
 
-The test-vector key is public, so anyone can read or erase its library. Use it only against a local server (`bun run dev`, then `http://localhost:8787`), never for real highlights. The hosted server is `https://vault.selah.tools`: point your app there once these steps work against your local one.
+Every `/v2/*` request carries either the first-party `selah_session` cookie or an `Authorization: Bearer sv2.<userId>.<secret>` header. The Worker extracts `<userId>` directly from the token prefix and routes straight to that user's isolated SQLite Durable Object (`LibraryDO`) with zero D1 hops.
 
-## 1. Parse the key
+## 2. Cold Boot (`GET /v2/bootstrap`)
 
-[SPEC 5.1](../SPEC.md#51-the-sync-key). The text `000G-40R4-0M30-E209-185G-R38E-1YZ0` is Crockford base32 of 16 key bytes plus a check byte. Accept any case, ignore dashes and spaces, read `O` as `0` and `I`/`L` as `1`, and reject a key whose check byte (the first byte of SHA-256 of the key) doesn't match.
-
-```
-key = 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f
-```
-
-## 2. Derive the library id, token and keys
-
-[SPEC 5.2](../SPEC.md#52-derived-values). HKDF-SHA256, empty salt, from the 16 key bytes:
-
-```
-lib  = hex(HKDF(key, "hidden-word/v1/lib", 16))        = 2f4856b70a85a635e64ca60c047e27fb
-auth = base64url(HKDF(key, "hidden-word/v1/auth", 32)) = fCuKEYwQJkKHQKEupTVwTYeowChbJzSwgT5iyBG-CJI
-enc  = HKDF(key, "hidden-word/v1/enc", 32)             AES-256-GCM key
-mac  = HKDF(key, "hidden-word/v1/mac", 32)             HMAC-SHA256 key
-```
-
-## 3. Make an item
-
-[SPEC 5.3](../SPEC.md#53-items). For the record
-
-```json
-{"kind":"highlight","ref":"JHN.3.16","updated":1793000000,"highlights":[{"color":"yellow","created":1792000000}]}
-```
-
-- `id` = base64url(HMAC-SHA256(mac, "highlight JHN.3.16")), first 22 characters: `cq_pOilWI_5HRaH6ll9W2d`.
-- `blob` = base64url(nonce ‖ AES-256-GCM(enc, nonce, plaintext, aad = id)), where the plaintext is the JSON padded with spaces to 256 bytes. With the fixed nonce `000102030405060708090a0b` from `test/vectors.json` you get exactly its `blob`. Real clients use 12 fresh random bytes every time.
-
-## 4. Push
-
-[SPEC 5.4](../SPEC.md#54-routes). The first write claims the library for this token.
+When a device starts with `seq === 0`, hydrate materialized state in a single round-trip instead of replaying every historical event:
 
 ```sh
 S=http://localhost:8787
-LIB=2f4856b70a85a635e64ca60c047e27fb
-TOKEN=fCuKEYwQJkKHQKEupTVwTYeowChbJzSwgT5iyBG-CJI
+TOKEN="sv2.u_0123456789abcdef012345.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 
-curl -s -X POST $S/v1/lib/$LIB -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
-  -d '{"items":[{"id":"cq_pOilWI_5HRaH6ll9W2d","blob":"AAECAwQFBgcICQoLq8SFwYE8sb0Q7Nvj0LOe6lpQU5r-sMxoBjyo4EP05KSuW7lN79F32bdn56D8EI6iKnaePNLsnxzid7fKUGOpfZj3sFrmQjSdPoLtPeZuBPTPkoPjGnFYloQ4bWNIzu5XtH1NRhcrxGcWHplpjj9yfs6ReI6P7PGUUNUiImUrSskqfI1GJ0vLEVI-puqVYS-90vel6nLEeWTQt-NtECi4kTBs5trpW4Jk4XEpXDi3LePDSOgRuKCRdYWoa-ex8xIGmroNWKFyMhN1M4ngPeikW99IPDk0NOH1wzEaR-KC-CyCflE-P7Dgw3a6BNwzJp3y4twt8SaCmBEDle1zni80Tdr7tecLTIweeXP8LioMAAI"}]}'
+curl -s "$S/v2/bootstrap" -H "authorization: Bearer $TOKEN"
 ```
 
 ```json
-{"seq":1,"epoch":"198398cd159821b83ab1a49e"}
+{
+  "seq": 14,
+  "library": { "id": "u_0123456789abcdef012345", "name": "Personal" },
+  "passages": [{ "ref": "JHN.3.16-18", "createdTs": 1792000000000, "updatedTs": 1793000000000, "apps": {} }],
+  "removedPassages": [],
+  "highlights": [{ "ref": "JHN.3.16", "color": "yellow", "createdTs": 1792000000000, "updatedTs": 1793000000000 }],
+  "colors": [{ "id": "yellow", "name": "Promises", "hex": null, "builtIn": true }],
+  "blocks": [],
+  "srs": { "cards": [], "dailyStats": [] }
+}
 ```
 
-The epoch is random; yours will differ. Remember it with the `seq`.
+Save `seq` (`14`) locally as your incremental cursor.
 
-## 5. Pull and merge
+## 3. Append Events (`POST /v2/events`)
+
+Queue edits in a local outbox with client-generated `"ev_<16..32 base64url chars>"` IDs and millisecond timestamps (`ts`), then flush in batches of up to 500 events:
 
 ```sh
-curl -s "$S/v1/lib/$LIB?after=0" -H "authorization: Bearer $TOKEN"
+curl -s -X POST "$S/v2/events" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"events":[{"id":"ev_a1b2c3d4e5f6g7h8i9j0","ts":1793000500000,"app":"selah-vault","kind":"highlight.set","ref":"ROM.5.3","data":{"color":"green"}}]}'
 ```
 
 ```json
-{"items":[{"seq":1,"id":"cq_pOilWI_5HRaH6ll9W2d","blob":"AAECAwQFBgcICQoL…"}],"more":false,"seq":1,"epoch":"198398cd159821b83ab1a49e"}
+{"seq":15,"accepted":1,"duplicates":0}
 ```
 
-For each item: decrypt it, strip the trailing spaces, parse the JSON, check that `id` is the item id of its `kind` and `ref` (skip it if not), and keep it only if it wins against your copy by [the merge rule](../SPEC.md#3-merging). Move your cursor to the last `seq`, and ask again while `more` is true.
+Writes are idempotent by `event.id` (`INSERT OR IGNORE`): retrying an interrupted network request increments `duplicates` without re-applying the event.
 
-Errors look like this:
+## 4. Incremental Pull (`GET /v2/events`) & Live WebSockets (`/v2/ws`)
+
+Pull events committed after your saved `seq` (optionally filtered by `kind`, `ref`, `tag`, or `app`):
 
 ```sh
-curl -s $S/v1/lib/$LIB -H "authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+curl -s "$S/v2/events?after=14&limit=500" -H "authorization: Bearer $TOKEN"
 ```
 
-```json
-{"error":"wrong token for this library"}
-```
+Open a WebSocket to `wss://vault.selah.tools/v2/ws` with `Sec-WebSocket-Protocol: selah-v2, token.<TOKEN>` to receive `{"type":"hello","seq":15}` on connect and `{"type":"poke","seq":16}` whenever another device or app appends events.
 
-with status 401. `curl -X DELETE …` with the right token erases the library (204) and releases the claim.
-
-## The sync loop
-
-[SPEC 5.6](../SPEC.md#56-syncing-with-a-server). Per server, keep `cursor`, `seq`, `epoch`, and which records it still needs.
-
-```
-sync():
-  for each batch of up to 100 records the server still needs (never ones it sent you):
-    answer = POST /v1/lib/{lib} {items}
-    if lost(answer): return refill()
-    epoch = answer.epoch
-    if answer.seq - distinct ids sent == cursor: cursor = answer.seq   # nobody else wrote
-    seq = max(seq, answer.seq)
-  loop:
-    page = GET /v1/lib/{lib}?after={cursor}
-    if lost(page): return refill()
-    for item in page.items:
-      record = decrypt and check(item)
-      if mine beats record: send mine again next time
-      else if record beats mine: keep record
-      cursor = item.seq
-    seq = max(seq, page.seq)
-    if not page.more: break
-
-lost(answer) = (epoch != null and answer.epoch != epoch) or answer.seq < seq
-refill()     = cursor = 0, seq = 0, epoch = answer.epoch, mark every record (deleted ones too) as needed, sync() again
-```
-
-Run it after changes, on start, when the network returns, and every 30 seconds or so while visible. Never delete a local record because a server lacks it ([SPEC 6](../SPEC.md#6-rules-that-protect-peoples-data)).
-
-## Ranges
-
-Highlights are stored one record per verse, encrypted, so the server can't see refs or colors and can't expand or merge ranges for you. The reference client does both ([SPEC 1.2, Ranges in apps](../SPEC.md#ranges-in-apps)):
+## 5. Using the Reference Client (`public/sync.js`)
 
 ```js
 import { Library, serverTransport } from "./sync.js";
 
-const lib = await Library.open({ keyText });
-await lib.use([serverTransport({ url: "https://vault.selah.tools" })]);
+const lib = await Library.open({ userId: "u_0123456789abcdef012345", token: TOKEN });
+await lib.use([serverTransport({ url: "https://vault.selah.tools", token: TOKEN })]);
 
-// Write: one record per verse, saved together and sent in one POST (all or none). At most 100 verses,
-// in one chapter. Verses already that color are left alone, so repeating it writes nothing.
 await lib.highlightRange("ROM.5.3-5", "green");
-// → { ref: "ROM.5.3-5", verses: ["ROM.5.3", "ROM.5.4", "ROM.5.5"], written: ["ROM.5.3", "ROM.5.4", "ROM.5.5"] }
-
-// Read: one record per verse, as before…
-lib.highlights();
-// → [{ kind: "highlight", ref: "ROM.5.3", highlights: [{ color: "green", created: … }], updated: … }, …]
-
-// …or grouped the way the vault's list shows them.
+await lib.savePassage("JHN.3.16-18");
 lib.highlights({ group: "ranges" });
-// → [{ ref: "ROM.5.3-5", verses: ["ROM.5.3", "ROM.5.4", "ROM.5.5"], color: "green", time: 1793000000 }]
 ```
-
-Apps connected with a grant get the same through `public/grant-client.js` ([SPEC 4.3](../SPEC.md#43-the-highlights-api), [docs/connect.md](connect.md)). The rule itself is `public/ranges.js`: `rangeWrites(ref, color, t, find)` gives the records to encrypt and POST together, and `listRanges(records, colorIds)` the grouped view.
-
-## Check your work
-
-- `test/vectors.json`: key, derived values, item id, blob and slot values to reproduce.
-- `conformance/fixtures.json`: merge cases, the `updated` an edit gets, refill decisions, and sync scenarios to replay with your client.
-- `bun run conformance <base-url>`: checks a server's library routes with a fresh random key, and deletes its library at the end ([SPEC 10.1](../SPEC.md#101-conformance)).
-
-The reference client is `public/sync.js`: plain JavaScript that runs in browsers, Bun, Node, Deno and Workers. Importing it is a fine way to start.

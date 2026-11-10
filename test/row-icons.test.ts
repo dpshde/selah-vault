@@ -8,7 +8,7 @@ test("every row gets the globe to route.bible between the pencil and the trash, 
   expect(app).toMatch(/actions\.append\(edit\);\s*actions\.append\(globeLink\(runRef, routeHref\)\);\s*actions\.append\(del\);/);
   // The key is kept on the device and the config fetch is retried, so a slow or failed /config.json
   // doesn't drop the book from every row.
-  expect(app).toContain('const YV_KEY = "hidden-word:yv-key";');
+  expect(app).toContain('const YV_KEY = "selah-vault:yv-key";');
   expect(app).toContain("useVerseKey(localStorage.getItem(YV_KEY))");
   expect(app).toContain("setTimeout(() => loadConfig(false), 2000)");
 });

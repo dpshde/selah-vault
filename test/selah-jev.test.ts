@@ -102,9 +102,9 @@ describe("relevance request shape", () => {
 describe("selah-jev Worker", () => {
   test("CORS allows the alias and preview versions of the vault, and no look-alikes", () => {
     expect(allowedOrigin("https://sync.selah.tools")).toBe(true);
-    expect(allowedOrigin("https://1a2b3c4d-hidden-word.dpshade.workers.dev")).toBe(true);
-    expect(allowedOrigin("https://hidden-word.evil.workers.dev")).toBe(false);
-    expect(allowedOrigin("https://x-hidden-word.dpshade.workers.dev.evil.example")).toBe(false);
+    expect(allowedOrigin("https://1a2b3c4d-selah-vault.dpshade.workers.dev")).toBe(true);
+    expect(allowedOrigin("https://selah-vault.evil.workers.dev")).toBe(false);
+    expect(allowedOrigin("https://x-selah-vault.dpshade.workers.dev.evil.example")).toBe(false);
   });
 
   test("CORS allows only the vault origin", async () => {

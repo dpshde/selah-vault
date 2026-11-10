@@ -1,0 +1,60 @@
+# Production deployment workflow for selah-vault (https://vault.selah.tools).
+# Trigger manually via workflow_dispatch, or automatically on push to main when
+# repository/environment variable ENABLE_AUTO_DEPLOY is set to 'true'.
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://vault.selah.tools
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: mise run install
+
+      - name: Run pre-deploy quality gates
+        run: mise run check
+
+      - name: Apply production D1 migrations (selah-vault-auth)
+        run: mise run db:migrate:prod
+
+      - name: Deploy selah-vault Worker & Static Assets
+        run: cf deploy
+
+      - name: Verify live production assets & security headers
+        run: mise run verify

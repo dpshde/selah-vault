@@ -33,16 +33,16 @@ test("book suggestions under #ref are name-only, clipped to the field (no CHAPTE
   expect(css).toMatch(/si-passage-input::part\(cell\)\s*\{[^}]*overflow:\s*visible/);
 });
 
-test("one way to sync: the Sync screen offers this site's server and no folder", () => {
+test("one way to sync: the Sync screen offers server sync, passkeys, and connected apps (no folder or sync key)", () => {
   const sync = /<section id="sync"[\s\S]*?<\/section>/.exec(read("index.html"))?.[0] ?? "";
   expect(sync).toContain('id="use-server"');
   expect(sync).toContain('role="switch"');
   expect(sync).toContain("Across devices");
   expect(sync).toContain('class="row sync-actions"');
-  expect(sync).toContain('<button type="button" class="quiet" id="show-key"');
   expect(sync).toContain('<button type="button" id="add-passkey"');
-  expect(sync).toContain('id="copy-key"');
-  expect(sync).toContain('aria-label="Copy sync key"');
+  expect(sync).toContain('id="grants-list"');
+  expect(sync).toContain("Connected apps");
+  expect(sync).not.toContain('id="show-key"');
   expect(sync).not.toContain('class="lede"');
   expect(sync.toLowerCase()).not.toContain("folder");
   expect(app).not.toMatch(/folder\.js|showDirectoryPicker|folderTransport|fromBibleRs/);

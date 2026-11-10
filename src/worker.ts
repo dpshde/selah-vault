@@ -1,356 +1,80 @@
-// Selah Vault server (spec v1.2): a blind store of encrypted blobs. It never sees verses, notes,
-// names or keys, only random-looking ids, ciphertext, and SHA-256 hashes of bearer tokens.
+// Cloudflare Worker entrypoint & hibernating SQLite LibraryDO for Selah Vault v2.
 
-import { YV_PREFIX, yvProxy } from "./yv";
-import { mcp } from "./mcp/index";
-import { GRANT_DAYS, GRANT_TOKEN, allowedClient, grantAllows, parseScopes } from "../public/grants.js";
-import { type Note, clientErrors, errorFields, noNote, observe } from "./observe";
+import { DurableObject } from "cloudflare:workers";
+import { LibraryEngine } from "./library";
+import { type Env, fetchApp } from "./server";
 
-export interface Env {
-  DB: D1Database;
-  ASSETS?: Fetcher;
-  /** YouVersion Platform public app key, for verse text in the web app. A Worker secret, so it stays out of git. */
-  YVP_PUBLIC_APP_KEY?: string;
+export type { Env };
+
+export class LibraryDO extends DurableObject<Env> {
+  private readonly engine: LibraryEngine;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.engine = new LibraryEngine({
+      sql: {
+        exec: <T extends Record<string, unknown> = Record<string, unknown>>(query: string, ...bindings: unknown[]): T[] => {
+          const cursor = this.ctx.storage.sql.exec(query, ...(bindings as SqlStorageValue[]));
+          return [...cursor] as unknown as T[];
+        },
+        transactionSync: <T>(fn: () => T): T => this.ctx.storage.transactionSync(fn),
+        deleteAll: () => {
+          void this.ctx.storage.deleteAll();
+        },
+      },
+      broadcastPoke: (seq: number) => {
+        const msg = JSON.stringify({ type: "poke", seq });
+        for (const ws of this.ctx.getWebSockets()) {
+          try {
+            ws.send(msg);
+          } catch {
+            // Ignore closed sockets.
+          }
+        }
+      },
+      acceptWebSocket: (request: Request, headSeq: number): Response => {
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+          return new Response(JSON.stringify({ error: "Expected WebSocket upgrade" }), {
+            status: 426,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+        this.ctx.acceptWebSocket(server);
+        server.send(JSON.stringify({ type: "hello", seq: headSeq }));
+
+        const headers = new Headers();
+        const proto = request.headers.get("sec-websocket-protocol") ?? "";
+        if (proto.split(",").some((p) => p.trim() === "selah-v2")) {
+          headers.set("sec-websocket-protocol", "selah-v2");
+        }
+        return new Response(null, { status: 101, webSocket: client, headers });
+      },
+    });
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    return this.engine.fetch(request);
+  }
+
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message === "string" && (message === "ping" || message.includes('"ping"'))) {
+      ws.send(JSON.stringify({ type: "pong", seq: this.engine.headSeq() }));
+    }
+  }
+
+  override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closed.
+    }
+  }
 }
-
-type Item = { seq: number; id: string; blob: string };
-
-const HEX32 = /^[0-9a-f]{32}$/;
-const ITEM_ID = /^[A-Za-z0-9_-]{22}$/;
-const TOKEN = /^[A-Za-z0-9_-]{43}$/;
-const B64URL = /^[A-Za-z0-9_-]+$/;
-
-export const LIMITS = {
-  itemsPerPost: 100,
-  pageSize: 500,
-  // 16 KiB of padded plaintext + nonce + tag, as base64url.
-  blobChars: 21_900,
-  // Smallest blob: 256 bytes of plaintext + nonce + tag.
-  minBlobChars: 379,
-  libraryChars: 8_000_000,
-  wrappedChars: 2_000,
-  bodyBytes: 2_400_000,
-} as const;
-
-const CORS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "access-control-allow-headers": "authorization, content-type",
-  "access-control-max-age": "86400",
-};
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, "content-type": "application/json", "cache-control": "no-store" },
-  });
-}
-
-const empty = (status = 204) => new Response(null, { status, headers: { ...CORS, "cache-control": "no-store" } });
-const fail = (status: number, error: string) => json({ error }, status);
-
-const clientError = clientErrors();
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    // One redacted log line per request (src/observe.ts); a failure logs its class, never its data.
-    return observe(request, async (note) => {
-      try {
-        return await handle(request, env, note);
-      } catch (error) {
-        note(errorFields(error));
-        return fail(500, "server error");
-      }
-    });
+    return fetchApp(request, env);
   },
 } satisfies ExportedHandler<Env>;
-
-/** The web app's address. sync.selah.tools is an alias that serves the same Worker directly. */
-const CANONICAL_ORIGIN = "https://vault.selah.tools";
-const OLD_HOST = "hidden-word.dpshade.workers.dev";
-/** What other apps call programmatically. These keep answering on the old address, so existing clients don't break. */
-const API_PATH = /^\/(?:v1(?:\/|$)|mcp$|api\/|config\.json$)/;
-
-/** Cloudflare's cache in a Worker; none under tests or other runtimes. */
-const edgeCache = (): Cache | null => (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
-
-export async function handle(request: Request, env: Env, note: Note = noNote): Promise<Response> {
-  const url = new URL(request.url);
-  const read = request.method === "GET" || request.method === "HEAD";
-  // The old workers.dev address sends browsers to the canonical one, same path and query.
-  if (url.hostname === OLD_HOST && read && !API_PATH.test(url.pathname)) {
-    return new Response(null, { status: 308, headers: { location: CANONICAL_ORIGIN + url.pathname + url.search } });
-  }
-  // /save?ref=…&color=… is the web app's: it saves into the library unlocked in the browser.
-  if (url.pathname === "/save" && env.ASSETS && (request.method === "GET" || request.method === "HEAD")) {
-    return env.ASSETS.fetch(new Request(new URL("/", url), request));
-  }
-  // Web app settings that shouldn't live in a public repo. The key is public by design (it reaches the
-  // browser either way); serving it from here keeps it out of git. No key: the app shows no verse text.
-  if (url.pathname === "/config.json" && (request.method === "GET" || request.method === "HEAD")) {
-    return json({ yvpPublicAppKey: env.YVP_PUBLIC_APP_KEY || null });
-  }
-  // The MCP server (src/mcp/): it opens a library with the caller's sync key and syncs through the
-  // routes below, called directly rather than over the network.
-  if (url.pathname === "/mcp") return mcp(request, (r) => handle(r, env), note);
-  // A row's verse text, through the edge cache (src/yv.ts).
-  if (url.pathname.startsWith(`${YV_PREFIX}/`)) return yvProxy(request, env.YVP_PUBLIC_APP_KEY, { fetch: (u, i) => fetch(u, i), cache: edgeCache() });
-  // Browser errors from public/report.js, scrubbed and logged.
-  if (url.pathname === "/api/client-error") return clientError(request, note);
-  const parts = url.pathname.split("/");
-  // Pages that run the Worker first (assets.runWorkerFirst, for the redirect above) are served from assets.
-  if (parts[1] !== "v1") return env.ASSETS && read ? env.ASSETS.fetch(request) : fail(404, "not found");
-  if (request.method === "OPTIONS") return empty();
-  if (parts.length !== 4 || !HEX32.test(parts[3])) return fail(404, "not found");
-  const token = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
-  const isGrant = !!token && GRANT_TOKEN.test(token);
-  if (!token || !(isGrant || TOKEN.test(token))) return fail(401, "missing or malformed bearer token");
-  const tokenHash = await sha256Hex(token);
-  if (parts[2] === "grant") return grants(request, env.DB, parts[3], tokenHash, isGrant);
-  if (isGrant) return parts[2] === "lib" ? granted(request, env.DB, parts[3], tokenHash) : fail(403, "a grant can't do that");
-  if (parts[2] === "lib") return library(request, env.DB, parts[3], tokenHash);
-  if (parts[2] === "slot") return slot(request, env.DB, parts[3], tokenHash);
-  return fail(404, "not found");
-}
-
-/** `?limit=` for a page of items: clamped to 1..pageSize; missing or not a number means pageSize. */
-export function pageLimit(text: string | null): number {
-  const n = text === null || text.trim() === "" ? NaN : Math.trunc(Number(text));
-  return Number.isFinite(n) ? Math.min(Math.max(n, 1), LIMITS.pageSize) : LIMITS.pageSize;
-}
-
-// Each route is one D1 batch: one round trip to the database, run as one transaction.
-
-async function library(request: Request, db: D1Database, lib: string, tokenHash: string): Promise<Response> {
-  switch (request.method) {
-    case "GET": {
-      const query = new URL(request.url).searchParams;
-      const after = Number(query.get("after") ?? "0");
-      if (!Number.isSafeInteger(after) || after < 0) return fail(400, "after must be a non-negative integer");
-      const limit = pageLimit(query.get("limit"));
-      const [libs, items] = await db.batch([
-        db.prepare("SELECT auth_hash, seq, epoch FROM libs WHERE lib = ?").bind(lib),
-        // Only for the right token: a wrong one never reads a blob.
-        db
-          .prepare(
-            `SELECT seq, id, blob FROM items WHERE lib = ?1 AND seq > ?2
-             AND EXISTS (SELECT 1 FROM libs WHERE lib = ?1 AND auth_hash = ?3) ORDER BY seq LIMIT ?4`,
-          )
-          .bind(lib, after, tokenHash, limit + 1),
-      ]);
-      const row = libs.results[0] as { auth_hash: string; seq: number; epoch: string } | undefined;
-      if (!row) return json({ items: [], more: false, seq: 0, epoch: null });
-      if (row.auth_hash !== tokenHash) return fail(401, "wrong token for this library");
-      const results = items.results as Item[];
-      return json({ items: results.slice(0, limit), more: results.length > limit, seq: row.seq, epoch: row.epoch });
-    }
-    case "POST":
-      return post(request, db, lib, tokenHash);
-    case "DELETE": {
-      const [libs] = await db.batch([
-        db.prepare("SELECT auth_hash FROM libs WHERE lib = ?").bind(lib),
-        db.prepare("DELETE FROM items WHERE lib = ?1 AND EXISTS (SELECT 1 FROM libs WHERE lib = ?1 AND auth_hash = ?2)").bind(lib, tokenHash),
-        db.prepare("DELETE FROM grants WHERE lib = ?1 AND EXISTS (SELECT 1 FROM libs WHERE lib = ?1 AND auth_hash = ?2)").bind(lib, tokenHash),
-        db.prepare("DELETE FROM libs WHERE lib = ? AND auth_hash = ?").bind(lib, tokenHash),
-      ]);
-      const row = libs.results[0] as { auth_hash: string } | undefined;
-      return row && row.auth_hash !== tokenHash ? fail(401, "wrong token for this library") : empty();
-    }
-    default:
-      return fail(405, "method not allowed");
-  }
-}
-
-// ---- grants (public/grants.js): limited, expiring tokens for another app
-
-const now = () => Math.floor(Date.now() / 1000);
-
-/** A grant token's request on /v1/lib/:lib: only what its scopes allow, only until it expires. */
-async function granted(request: Request, db: D1Database, lib: string, tokenHash: string): Promise<Response> {
-  const row = await db
-    .prepare("SELECT scopes FROM grants WHERE lib = ? AND token_hash = ? AND expires > ?")
-    .bind(lib, tokenHash, now())
-    .first<{ scopes: string }>();
-  if (!row) return fail(401, "grant expired, revoked, or not for this library");
-  if (!grantAllows(row.scopes.split(" "), request.method)) return fail(403, "this grant can't do that");
-  const libRow = await db.prepare("SELECT auth_hash FROM libs WHERE lib = ?").bind(lib).first<{ auth_hash: string }>();
-  // Read as the library's owner would: the grant stands in for its token.
-  return libRow ? library(request, db, lib, libRow.auth_hash) : json({ items: [], more: false, seq: 0, epoch: null });
-}
-
-/**
- * /v1/grant/:lib. With the library's own token: POST makes a grant ({ scopes, client }), GET lists
- * them, DELETE ?id= revokes one. With a grant token: DELETE revokes that grant (an app disconnecting).
- */
-async function grants(request: Request, db: D1Database, lib: string, tokenHash: string, isGrant: boolean): Promise<Response> {
-  if (isGrant) {
-    if (request.method !== "DELETE") return fail(403, "a grant can only revoke itself");
-    await db.prepare("DELETE FROM grants WHERE lib = ? AND token_hash = ?").bind(lib, tokenHash).run();
-    return empty();
-  }
-  const owner = await db.prepare("SELECT auth_hash FROM libs WHERE lib = ?").bind(lib).first<{ auth_hash: string }>();
-  if (!owner) return fail(404, "no such library");
-  if (owner.auth_hash !== tokenHash) return fail(401, "wrong token for this library");
-  switch (request.method) {
-    case "POST": {
-      const body = await readJson(request);
-      if (body instanceof Response) return body;
-      const scopes = parseScopes((body as { scopes?: unknown })?.scopes);
-      if (!scopes) return fail(400, "unknown scope");
-      const client = allowedClient((body as { client?: unknown })?.client);
-      if (!client) return fail(403, "that app isn't allowed to connect");
-      const id = hex(crypto.getRandomValues(new Uint8Array(16)));
-      const token = `g1.${b64u(crypto.getRandomValues(new Uint8Array(32)))}`;
-      const expires = now() + GRANT_DAYS * 86_400;
-      await db
-        .prepare("INSERT INTO grants (id, lib, token_hash, scopes, client, created, expires) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, lib, await sha256Hex(token), scopes.join(" "), client, now(), expires)
-        .run();
-      return json({ id, token, scopes, client, expires });
-    }
-    case "GET": {
-      const rows = await db
-        .prepare("SELECT id, scopes, client, created, expires FROM grants WHERE lib = ? AND expires > ? ORDER BY created DESC")
-        .bind(lib, now())
-        .all<{ id: string; scopes: string; client: string; created: number; expires: number }>();
-      return json({ grants: rows.results.map((g) => ({ ...g, scopes: g.scopes.split(" ") })) });
-    }
-    case "DELETE": {
-      const id = new URL(request.url).searchParams.get("id") ?? "";
-      if (!HEX32.test(id)) return fail(400, "id is required");
-      await db.prepare("DELETE FROM grants WHERE lib = ? AND id = ?").bind(lib, id).run();
-      return empty();
-    }
-    default:
-      return fail(405, "method not allowed");
-  }
-}
-
-const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-const b64u = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-// What the library's size would be after this write: its size now, plus the new blobs, minus the
-// blobs they replace. ?1 lib, ?3 characters added, ?4 the ids being written as a JSON list.
-const SIZE_AFTER = `size + ?3 - (SELECT COALESCE(SUM(LENGTH(blob)), 0) FROM items WHERE lib = ?1 AND id IN (SELECT value FROM json_each(?4)))`;
-
-async function post(request: Request, db: D1Database, lib: string, tokenHash: string): Promise<Response> {
-  const body = await readJson(request);
-  if (body instanceof Response) return body;
-  const items = parseItems(body);
-  if (typeof items === "string") return fail(400, items);
-  const n = items.length;
-  const adding = items.reduce((total, item) => total + item.blob.length, 0);
-  const ids = JSON.stringify(items.map((item) => item.id));
-
-  // One transaction. The first write claims the library for this token. Then reserve n sequence
-  // numbers and write each item with its own, so readers never see a later seq before an earlier
-  // one and `after` cursors skip nothing. A wrong token or a full library sets a NOT NULL column
-  // to NULL, which fails the batch and rolls all of it back, claim included.
-  let results: D1Result[];
-  try {
-    results = await db.batch([
-      db
-        .prepare("INSERT INTO libs (lib, auth_hash, seq, epoch, size) VALUES (?, ?, 0, ?, 0) ON CONFLICT(lib) DO NOTHING")
-        .bind(lib, tokenHash, newEpoch()),
-      db
-        .prepare(
-          `UPDATE libs SET seq = CASE WHEN auth_hash = ?2 THEN seq + ?5 END,
-             size = CASE WHEN ${SIZE_AFTER} <= ?6 THEN ${SIZE_AFTER} END
-           WHERE lib = ?1`,
-        )
-        .bind(lib, tokenHash, adding, ids, n, LIMITS.libraryChars),
-      ...items.map((item, i) =>
-        db
-          .prepare(
-            `INSERT INTO items (lib, id, seq, blob) VALUES (?1, ?2, (SELECT seq FROM libs WHERE lib = ?1) - ?3, ?4)
-             ON CONFLICT(lib, id) DO UPDATE SET seq = excluded.seq, blob = excluded.blob`,
-          )
-          .bind(lib, item.id, n - 1 - i, item.blob),
-      ),
-      db.prepare("SELECT seq, epoch FROM libs WHERE lib = ?").bind(lib),
-    ]);
-  } catch (error) {
-    // Only failures pay for a second round trip, to say which it was.
-    const row = await db
-      .prepare(`SELECT auth_hash = ?2 AS mine, ${SIZE_AFTER} AS after FROM libs WHERE lib = ?1`)
-      .bind(lib, tokenHash, adding, ids)
-      .first<{ mine: number; after: number }>();
-    if (row && !row.mine) return fail(401, "wrong token for this library");
-    if ((row?.after ?? adding) > LIMITS.libraryChars) return fail(413, "library is full");
-    throw error;
-  }
-  const last = results[results.length - 1].results[0] as { seq: number; epoch: string };
-  return json({ seq: last.seq, epoch: last.epoch });
-}
-
-async function slot(request: Request, db: D1Database, id: string, tokenHash: string): Promise<Response> {
-  const row = await db
-    .prepare("SELECT auth_hash, wrapped FROM slots WHERE slot = ?")
-    .bind(id)
-    .first<{ auth_hash: string; wrapped: string }>();
-  if (row && row.auth_hash !== tokenHash) return fail(401, "wrong token for this slot");
-  switch (request.method) {
-    case "GET":
-      return row ? json({ wrapped: row.wrapped }) : fail(404, "no such slot");
-    case "PUT": {
-      const body = await readJson(request);
-      if (body instanceof Response) return body;
-      const wrapped = (body as { wrapped?: unknown })?.wrapped;
-      if (typeof wrapped !== "string" || !B64URL.test(wrapped) || wrapped.length > LIMITS.wrappedChars || wrapped.length < 38) {
-        return fail(400, "wrapped must be base64url");
-      }
-      const [, saved] = await db.batch([
-        db
-          .prepare(
-            `INSERT INTO slots (slot, auth_hash, wrapped) VALUES (?, ?, ?)
-             ON CONFLICT(slot) DO UPDATE SET wrapped = excluded.wrapped WHERE slots.auth_hash = excluded.auth_hash`,
-          )
-          .bind(id, tokenHash, wrapped),
-        db.prepare("SELECT auth_hash FROM slots WHERE slot = ?").bind(id),
-      ]);
-      return (saved.results[0] as { auth_hash: string } | undefined)?.auth_hash === tokenHash ? empty() : fail(401, "wrong token for this slot");
-    }
-    case "DELETE":
-      if (row) await db.prepare("DELETE FROM slots WHERE slot = ?").bind(id).run();
-      return empty();
-    default:
-      return fail(405, "method not allowed");
-  }
-}
-
-async function readJson(request: Request): Promise<unknown | Response> {
-  if (Number(request.headers.get("content-length") ?? "0") > LIMITS.bodyBytes) return fail(413, "body too large");
-  const text = await request.text();
-  if (text.length > LIMITS.bodyBytes) return fail(413, "body too large");
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fail(400, "body must be JSON");
-  }
-}
-
-export function parseItems(body: unknown): Array<{ id: string; blob: string }> | string {
-  const items = (body as { items?: unknown })?.items;
-  if (!Array.isArray(items) || items.length === 0) return "items must be a non-empty list";
-  if (items.length > LIMITS.itemsPerPost) return `at most ${LIMITS.itemsPerPost} items per request`;
-  // The same id twice in one request: the later one wins, as if sent separately.
-  const byId = new Map<string, string>();
-  for (const item of items) {
-    const { id, blob } = (item ?? {}) as { id?: unknown; blob?: unknown };
-    if (typeof id !== "string" || !ITEM_ID.test(id)) return "every item needs a 22-character base64url id";
-    if (typeof blob !== "string" || !B64URL.test(blob)) return "every item needs a base64url blob";
-    if (blob.length < LIMITS.minBlobChars || blob.length > LIMITS.blobChars) return "blob size out of range";
-    byId.delete(id);
-    byId.set(id, blob);
-  }
-  return [...byId].map(([id, blob]) => ({ id, blob }));
-}
-
-function newEpoch(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
-  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
-}

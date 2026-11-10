@@ -1,34 +1,20 @@
-// Selah Vault's MCP server: Streamable HTTP, stateless, JSON-RPC over POST at /mcp. It opens the
-// caller's library with their sync key for one request, using the reference client (public/sync.js)
-// so reads and writes follow SPEC.md exactly, and syncs through the same routes every device uses.
-//
-// The sync key reaches this Worker in memory for the request and nowhere else: it is never stored,
-// logged, echoed, or put in an error. Every failure below answers with a fixed message.
+// Selah Vault v2 MCP Server: Streamable HTTP JSON-RPC at /mcp.
+// Authenticates with OAuth 2.1 / session Bearer tokens (sv2.<userId>.<secret>) and routes zero-hop to LibraryDO.
 
-import { Library, memoryStore, palette, serverTransport as server, topColor } from "../../public/sync.js";
 import { BOOKS as books, compareRefs, labelRef, splitRef } from "../../public/refs.js";
-import { groupRuns, highlightWrites, tombstone } from "../../public/ranges.js";
+import { groupRuns } from "../../public/ranges.js";
 import { readPassage as read } from "../../public/passage.js";
+import { b64uEncode, extractTokenFromRequest, sha256Hex } from "../clients";
+import { CORS_HEADERS } from "../library";
 import { type Note, noNote } from "../observe";
 
-// The shared modules are plain JavaScript; these are the shapes they take and return.
-const serverTransport = server as (options: { url?: string; fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }) => ReturnType<typeof server>;
 const BOOKS = books as Array<[code: string, name: string, chapters: number]>;
-const readPassage = read as (text: string) => { verses: string[]; label: string; error?: undefined } | { error: string; verses?: undefined; label?: undefined };
-
-/** Stands in for `fetch` to the sync routes: the router's own handler, with no network in between. */
-export type SyncFetch = (request: Request) => Promise<Response>;
+const readPassage = read as (
+  text: string,
+) => { verses: string[]; label: string; error?: undefined } | { error: string; verses?: undefined; label?: undefined };
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
-// name stays "hidden-word": clients and their configs know the server by it (decisions/rename-product-to-selah-vault.md).
-const SERVER_INFO = { name: "hidden-word", title: "Selah Vault", version: "0.2.0" };
-const CORS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "POST, GET, OPTIONS",
-  "access-control-allow-headers": "authorization, content-type, accept, mcp-protocol-version, mcp-session-id, x-hidden-word-key",
-  "access-control-max-age": "86400",
-};
-const BAD_KEY = "Missing or invalid sync key. Send it as Authorization: Bearer <sync key>.";
+const SERVER_INFO = { name: "selah-vault", title: "Selah Vault", version: "2.0.0" };
 const MAX_BODY = 64_000;
 
 type Json = Record<string, unknown>;
@@ -37,23 +23,28 @@ type Rpc = { jsonrpc?: string; id?: string | number | null; method?: string; par
 const reply = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(body === null ? null : JSON.stringify(body), {
     status,
-    headers: { ...CORS, "content-type": "application/json", "cache-control": "no-store", ...extra },
+    headers: { ...CORS_HEADERS, "content-type": "application/json", "cache-control": "no-store", ...extra },
   });
-const rpcError = (id: Rpc["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
-/** The sync key from `Authorization: Bearer …` or `X-Hidden-Word-Key`, unparsed. */
-function keyFrom(request: Request): string | null {
-  const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  return (bearer ?? request.headers.get("x-hidden-word-key") ?? "").trim() || null;
+const rpcError = (id: Rpc["id"], code: number, message: string) => ({
+  jsonrpc: "2.0",
+  id: id ?? null,
+  error: { code, message },
+});
+
+function wwwAuthHeader(request: Request): string {
+  const origin = new URL(request.url).origin;
+  const meta = `${origin}/.well-known/oauth-authorization-server`;
+  return `Bearer realm="selah-vault", authorization_uri="${meta}", resource_metadata="${meta}"`;
 }
 
 const METHODS = new Set(["initialize", "ping", "tools/list", "tools/call"]);
 
-/** `note` gets what the request log line may say: methods, tool names and outcomes, all fixed words. */
-export async function mcp(request: Request, syncFetch: SyncFetch, note: Note = noNote): Promise<Response> {
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  // Stateless: no server-to-client stream to open, and no session to end.
-  if (request.method !== "POST") return reply(rpcError(null, -32000, "Method not allowed"), 405, { allow: "POST, OPTIONS" });
+export async function mcp(request: Request, libraryNs: DurableObjectNamespace, note: Note = noNote): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+  if (request.method !== "POST") {
+    return reply(rpcError(null, -32000, "Method not allowed"), 405, { allow: "POST, OPTIONS" });
+  }
 
   const text = await request.text();
   if (text.length > MAX_BODY) return reply(rpcError(null, -32600, "Request too large"), 413);
@@ -68,99 +59,171 @@ export async function mcp(request: Request, syncFetch: SyncFetch, note: Note = n
     return reply(rpcError(null, -32600, "Invalid request"), 400);
   }
 
-  // Every request needs the key, the handshake included, so a client finds out at once.
-  let library: Library;
-  try {
-    const keyText = keyFrom(request);
-    if (!keyText) throw new Error();
-    library = await Library.open({ keyText, store: memoryStore() });
-  } catch {
-    note({ mcp: "bad_key" });
-    return reply(rpcError(messages[0]?.id, -32001, BAD_KEY), 401, { "www-authenticate": 'Bearer realm="hidden-word"' });
+  const parsed = extractTokenFromRequest(request, false);
+  if (!parsed) {
+    note({ mcp: "unauthorized" });
+    return reply(rpcError(messages[0]?.id, -32001, "Missing or invalid Bearer token."), 401, {
+      "www-authenticate": wwwAuthHeader(request),
+    });
   }
 
-  const session = new Session(library, syncFetch);
-  const answers = [];
-  for (const m of messages) {
-    const answer = await session.answer(m);
-    if (answer) answers.push(answer);
+  const stub = libraryNs.get(libraryNs.idFromName(parsed.userId));
+  const secretHash = await sha256Hex(parsed.secret);
+  const verifyRes = await stub.fetch(
+    new Request("https://library.internal/_internal/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: parsed.userId, secretHash }),
+    }),
+  );
+  if (!verifyRes.ok) {
+    note({ mcp: "unauthorized" });
+    return reply(rpcError(messages[0]?.id, -32001, "Invalid or expired Bearer token."), 401, {
+      "www-authenticate": wwwAuthHeader(request),
+    });
   }
-  const method = (m: Rpc) => (METHODS.has(m.method as string) ? m.method as string : (m.method as string).startsWith("notifications/") ? "notification" : "other");
-  note({ mcp: "ok", mcp_methods: messages.map(method).join(","), ...session.outcome });
-  // Only notifications: nothing to say.
-  if (!answers.length) return new Response(null, { status: 202, headers: CORS });
+
+  const session = new McpSession(stub, parsed.raw);
+  const answers: Json[] = [];
+  for (const m of messages) {
+    const ans = await session.answer(m);
+    if (ans) answers.push(ans);
+  }
+  const methodTag = (m: Rpc) =>
+    METHODS.has(m.method as string)
+      ? (m.method as string)
+      : (m.method as string).startsWith("notifications/")
+        ? "notification"
+        : "other";
+  note({ mcp: "ok", mcp_methods: messages.map(methodTag).join(","), ...session.outcome });
+  if (!answers.length) return new Response(null, { status: 202, headers: CORS_HEADERS });
   return reply(Array.isArray(body) ? answers : answers[0]);
 }
 
-// ---- tools
-
-const COLOR = { type: "string", description: "A color id (yellow, green, blue, pink, purple, orange, or a library's own id) or a name the library gave a color, like \"Prayer\"." };
+const COLOR = {
+  type: "string",
+  description:
+    'A color id (yellow, green, blue, pink, purple, orange, or a custom c-... id) or a custom color name like "Promises".',
+};
 const GROUP = {
   type: "string",
   enum: ["ranges", "verses"],
-  description: "\"ranges\" (the default): back-to-back verses in one color come as one passage, with each verse's ref in `verses`. \"verses\": one entry per highlighted verse.",
+  description: '"ranges" (default) groups contiguous verses in one color; "verses" returns one entry per verse.',
 };
-const REFERENCE = { type: "string", description: "A Bible reference in any common form: \"John 3:16\", \"Rom 5:3-5\", \"Psalm 23\", \"JHN.3.16-18\", or a bible.com or route.bible link." };
+const REFERENCE = {
+  type: "string",
+  description: 'A Bible reference in any common form: "John 3:16", "Rom 5:3-5", "Psalm 23", or "JHN.3.16-18".',
+};
+const BOOK_PROP = {
+  type: "string",
+  description: 'A book name or USFM code, like "Romans" or "ROM".',
+};
 
 export const TOOLS = [
   {
     name: "list_highlights",
-    description: "List the library's highlights in canonical order. Back-to-back verses in one color come as one passage, like Romans 5:3–5.",
+    description: "List the library's highlights in canonical order.",
     inputSchema: { type: "object", properties: { color: COLOR, group: GROUP }, additionalProperties: false },
   },
   {
     name: "find_highlights",
-    description: "Find highlights inside a passage (\"Romans 5\", \"John 3:1-21\") or a whole book (book: \"Romans\").",
+    description: "Find highlights inside a passage or book.",
     inputSchema: {
       type: "object",
-      properties: { reference: REFERENCE, book: { type: "string", description: "A book name or USFM code, like \"Romans\" or \"ROM\"." }, group: GROUP },
+      properties: { reference: REFERENCE, book: BOOK_PROP, group: GROUP },
       additionalProperties: false,
     },
   },
   {
     name: "add_highlight",
-    description: "Highlight every verse a reference covers, a range like \"Rom 5:3-5\" included, in one color (yellow when none is given). Saved one record per verse, together. Verses already highlighted take the new color; verses already in that color are left as they are.",
+    description: "Highlight every verse a reference covers in one color (yellow by default).",
     inputSchema: { type: "object", properties: { reference: REFERENCE, color: COLOR }, required: ["reference"], additionalProperties: false },
   },
   {
     name: "set_highlight_color",
-    description: "Recolor the highlighted verses inside a reference. Verses that aren't highlighted stay that way.",
+    description: "Recolor already-highlighted verses inside a reference.",
     inputSchema: { type: "object", properties: { reference: REFERENCE, color: COLOR }, required: ["reference", "color"], additionalProperties: false },
   },
   {
     name: "delete_highlight",
-    description: "Remove the highlights on every verse a reference covers. Other devices remove them when they next sync.",
+    description: "Remove highlights on every verse a reference covers.",
     inputSchema: { type: "object", properties: { reference: REFERENCE }, required: ["reference"], additionalProperties: false },
   },
   {
+    name: "list_passages",
+    description: "List saved passages in the library in canonical order.",
+    inputSchema: { type: "object", properties: { book: BOOK_PROP }, additionalProperties: false },
+  },
+  {
+    name: "save_passage",
+    description: "Save a Scripture passage to the library.",
+    inputSchema: { type: "object", properties: { reference: REFERENCE }, required: ["reference"], additionalProperties: false },
+  },
+  {
+    name: "remove_passage",
+    description: "Remove a saved passage from the library without deleting notes or SRS history.",
+    inputSchema: { type: "object", properties: { reference: REFERENCE }, required: ["reference"], additionalProperties: false },
+  },
+  {
+    name: "search_notes",
+    description: "Full-text search over outliner note blocks in the library.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search words or phrase." },
+        limit: { type: "number", description: "Maximum results (default 50)." },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "list_colors",
-    description: "List the library's colors (the six built in, then its own), with the name each was given and how many verses use it.",
+    description: "List the library's colors and verse counts.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "get_library_info",
-    description: "The library's name (null until one has synced), and counts of what it holds: highlighted verses, passages, notes and colors.",
+    description: "Get the library's name, sequence number, and item counts.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "get_passage_link",
-    description: "A route.bible link that opens a reference in the reader's preferred Bible app. Reads nothing from the library.",
+    description: "Build a route.bible link for a Scripture reference.",
     inputSchema: { type: "object", properties: { reference: REFERENCE }, required: ["reference"], additionalProperties: false },
   },
 ] as const;
 
-/** A mistake in what the caller asked for: its message goes back as the tool's answer. */
 class Refusal extends Error {}
 
-type Rec = { kind: string; ref: string; highlights: Array<Json & { color: string }>; [k: string]: unknown };
+class RpcFault extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+  }
+}
+
+interface BootstrapState {
+  seq: number;
+  library: { id: string; name: string };
+  passages: Array<{ ref: string; createdTs: number; updatedTs: number; apps: Json }>;
+  removedPassages: Array<{ ref: string; removedTs: number }>;
+  highlights: Array<{ ref: string; color: string; createdTs: number; updatedTs: number }>;
+  colors: Array<{ id: string; name: string; hex: string | null; builtIn: boolean }>;
+  blocks: Array<Json>;
+  srs: { cards: Array<Json>; dailyStats: Array<Json> };
+}
 
 const link = (ref: string) => `https://route.bible/${ref.toLowerCase()}`;
+const newEventId = () => `ev_${b64uEncode(crypto.getRandomValues(new Uint8Array(16)))}`;
 
-class Session {
-  synced = false;
-  /** For the log line: tools called and how they ended, as fixed words. */
+class McpSession {
+  private bootCache: BootstrapState | null = null;
   outcome: Record<string, string> = {};
-  constructor(readonly library: Library, readonly syncFetch: SyncFetch) {}
+
+  constructor(
+    private readonly stub: DurableObjectStub,
+    private readonly rawToken: string,
+  ) {}
 
   async answer(m: Rpc): Promise<Json | null> {
     const notification = m.id === undefined || m.id === null;
@@ -183,7 +246,8 @@ class Session {
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
           capabilities: { tools: { listChanged: false } },
           serverInfo: SERVER_INFO,
-          instructions: "Tools for one Selah Vault library of Bible highlights, opened with its sync key. References are USFM (JHN.3.16) underneath; give them in any common form.",
+          instructions:
+            "Tools for a Selah Vault v2 library of Scripture passages, highlights, notes, and SRS. Give references in any common form.",
         };
       }
       case "ping":
@@ -206,77 +270,90 @@ class Session {
       return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false };
     } catch (error) {
       this.outcome.tool_result = error instanceof Refusal ? "refused" : "failed";
-      if (!(error instanceof Refusal)) this.outcome.mcp_error_class = error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : "Error";
-      // Answers never repeat what the caller sent, which could be anything (a pasted key, even).
-      const sent = Object.values(args).map(String).filter((v) => v.length >= 6);
-      const message =
-        error instanceof Refusal && !sent.some((v) => error.message.includes(v)) ? error.message
-        : error instanceof Refusal ? "That request couldn't be read." : "The library couldn't be reached. Try again.";
+      if (!(error instanceof Refusal)) {
+        this.outcome.mcp_error_class = error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : "Error";
+      }
+      const message = error instanceof Refusal ? error.message : "The library couldn't be reached. Try again.";
       return { content: [{ type: "text", text: message }], isError: true };
     }
   }
 
-  /** Reads the library from the server, once per request. */
-  async open() {
-    if (this.synced) return;
-    const transport = serverTransport({ fetch: (input: RequestInfo | URL, init?: RequestInit) => this.syncFetch(new Request(new URL(String(input), "https://hidden-word.internal"), init)) });
-    await this.library.use([transport]);
-    this.check();
-    this.synced = true;
+  private async fetchLibrary(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set("authorization", `Bearer ${this.rawToken}`);
+    return this.stub.fetch(new Request(`https://library.internal${path}`, { ...init, headers }));
   }
 
-  /** The last sync's outcome: a failure becomes the tool's fixed error, never the server's words. */
-  check() {
-    const state = this.library.status.remotes ? Object.values(this.library.status.remotes as Record<string, { state: string }>) : [];
-    if (state.some((r) => r.state !== "synced")) throw new Error("sync failed");
+  private async bootstrap(refresh = false): Promise<BootstrapState> {
+    if (this.bootCache && !refresh) return this.bootCache;
+    const res = await this.fetchLibrary("/v2/bootstrap");
+    if (res.status === 403) throw new Refusal("This token does not have read permission.");
+    if (!res.ok) throw new Error(`bootstrap ${res.status}`);
+    this.bootCache = (await res.json()) as BootstrapState;
+    return this.bootCache;
   }
 
-  async save(records: Json[]) {
-    if (!records.length) return;
-    await this.library.putMany(records);
-    await this.library.sync();
-    this.check();
+  private async postEvents(events: Array<Record<string, unknown>>): Promise<void> {
+    if (!events.length) return;
+    const res = await this.fetchLibrary("/v2/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ events }),
+    });
+    if (res.status === 403) throw new Refusal("This token does not have permission for that write.");
+    if (!res.ok) throw new Error(`events ${res.status}`);
+    this.bootCache = null;
   }
 
-  get colors() {
-    return palette(this.library.all("color"));
-  }
-
-  colorName(id: string) {
-    const c = this.colors.find((x) => x.id === id);
-    return c?.name || (c?.builtIn ? id[0].toUpperCase() + id.slice(1) : id);
-  }
-
-  /** A color by id or by name; a mistake says which colors there are. */
-  color(wanted: unknown, fallback?: string): string {
-    if (wanted === undefined || wanted === null || wanted === "") {
-      if (fallback) return fallback;
-      throw new Refusal("Give a color.");
-    }
-    const w = String(wanted).trim().toLowerCase();
-    const found = this.colors.find((c) => c.id === w) ?? this.colors.find((c) => this.colorName(c.id).toLowerCase() === w);
-    if (!found) throw new Refusal(`That isn't one of the library's colors: ${this.colors.map((c) => this.colorName(c.id)).join(", ")}.`);
-    return found.id;
-  }
-
-  verses(reference: unknown): { verses: string[]; label: string } {
+  private verses(reference: unknown): { verses: string[]; label: string } {
     const found = readPassage(String(reference ?? ""));
     if (found.error !== undefined) throw new Refusal(found.error);
     return found;
   }
 
-  highlights(): Rec[] {
-    return (this.library.all("highlight") as Rec[]).sort((a, b) => compareRefs(a.ref, b.ref));
+  private resolveColor(boot: BootstrapState, wanted: unknown, fallback?: string) {
+    if (wanted === undefined || wanted === null || wanted === "") {
+      if (!fallback) throw new Refusal("Give a color.");
+      const fb = boot.colors.find((c) => c.id === fallback)!;
+      return fb;
+    }
+    const w = String(wanted).trim().toLowerCase();
+    const found = boot.colors.find((c) => c.id.toLowerCase() === w) ?? boot.colors.find((c) => c.name.toLowerCase() === w);
+    if (!found) {
+      throw new Refusal(`That isn't one of the library's colors: ${boot.colors.map((c) => c.name).join(", ")}.`);
+    }
+    return found;
   }
 
-  /** Records as the app lists them: runs of back-to-back verses in one color, or one per verse. */
-  runs(records: Rec[], group: unknown = "ranges") {
-    if (group !== undefined && group !== "ranges" && group !== "verses") throw new Refusal("group is \"ranges\" or \"verses\".");
-    const ids = this.colors.map((c) => c.id);
-    return groupRuns(records, group === "verses" ? (r: Rec) => r.ref : (r: Rec) => topColor(r, ids)).map(({ ref, records: rs }: { ref: string; records: Rec[] }) => {
-      const color = topColor(rs[0], ids);
-      return { reference: labelRef(ref), ref, color, colorName: this.colorName(color), verses: rs.map((r) => r.ref), link: link(ref) };
-    });
+  private formatRuns(
+    boot: BootstrapState,
+    records: Array<{ ref: string; color: string }>,
+    group: unknown = "ranges",
+  ) {
+    if (group !== undefined && group !== "ranges" && group !== "verses") {
+      throw new Refusal('group must be "ranges" or "verses".');
+    }
+    const sorted = [...records].sort((a, b) => compareRefs(a.ref, b.ref));
+    const colorName = (id: string) => boot.colors.find((c) => c.id === id)?.name ?? id;
+    return groupRuns(sorted, group === "verses" ? (r: { ref: string }) => r.ref : (r: { color: string }) => r.color).map(
+      ({ ref, records: rs }: { ref: string; records: Array<{ ref: string; color: string }> }) => ({
+        reference: labelRef(ref),
+        ref,
+        color: rs[0].color,
+        colorName: colorName(rs[0].color),
+        verses: rs.map((r) => r.ref),
+        link: link(ref),
+      }),
+    );
+  }
+
+  private passageRefs(reference: unknown): { refs: string[]; label: string } {
+    const raw = String(reference ?? "").trim();
+    const direct = splitRef(raw);
+    if (direct) return { refs: [raw], label: labelRef(raw) };
+    const { verses, label } = this.verses(raw);
+    const refs = groupRuns(verses.map((ref) => ({ ref })), () => 0).map((g: { ref: string }) => g.ref);
+    return { refs, label };
   }
 
   async run(name: string, args: Json): Promise<Json> {
@@ -285,13 +362,35 @@ class Session {
       const refs = groupRuns(verses.map((ref) => ({ ref })), () => 0).map((g: { ref: string }) => g.ref);
       return { reference: label, links: refs.map((ref: string) => ({ reference: labelRef(ref), ref, link: link(ref) })) };
     }
-    await this.open();
-    const ids = this.colors.map((c) => c.id);
+
+    if (name === "search_notes") {
+      const q = String(args.query ?? "").trim();
+      if (!q) throw new Refusal("Provide a search query.");
+      const limit = typeof args.limit === "number" ? args.limit : 50;
+      const res = await this.fetchLibrary(`/v2/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}`);
+      if (res.status === 403) throw new Refusal("This token does not have read permission.");
+      if (!res.ok) throw new Error(`search ${res.status}`);
+      return (await res.json()) as Json;
+    }
+
+    return this.runBootstrapTool(name, args);
+  }
+
+  private async runBootstrapTool(name: string, args: Json): Promise<Json> {
+    const boot = await this.bootstrap();
+    const maxSeen = Math.max(
+      0,
+      ...boot.highlights.map((h) => h.updatedTs ?? 0),
+      ...boot.passages.map((p) => p.updatedTs ?? 0),
+      ...(boot.removedPassages ?? []).map((p) => p.removedTs ?? 0),
+    );
+    const now = Math.max(Date.now(), maxSeen + 1);
+
     switch (name) {
       case "list_highlights": {
-        const color = args.color === undefined ? null : this.color(args.color);
-        const records = this.highlights().filter((r) => !color || topColor(r, ids) === color);
-        return { highlights: this.runs(records, args.group) };
+        const color = args.color === undefined ? null : this.resolveColor(boot, args.color).id;
+        const filtered = boot.highlights.filter((h) => !color || h.color === color);
+        return { highlights: this.formatRuns(boot, filtered, args.group) };
       }
       case "find_highlights": {
         let inside: (ref: string) => boolean;
@@ -307,47 +406,131 @@ class Session {
           inside = (ref) => set.has(ref);
           label = found.label;
         }
-        return { reference: label, highlights: this.runs(this.highlights().filter((r) => inside(r.ref)), args.group) };
+        return { reference: label, highlights: this.formatRuns(boot, boot.highlights.filter((h) => inside(h.ref)), args.group) };
       }
       case "add_highlight": {
         const { verses, label } = this.verses(args.reference);
-        const color = this.color(args.color, "yellow");
-        const t = Math.floor(Date.now() / 1000);
-        await this.save(highlightWrites(verses, color, t, (v: string) => this.library.find("highlight", v)));
-        return { added: label, color, colorName: this.colorName(color), verses };
+        const col = this.resolveColor(boot, args.color, "yellow");
+        const existing = new Map(boot.highlights.map((h) => [h.ref, h.color]));
+        const toWrite = verses.filter((v) => existing.get(v) !== col.id);
+        await this.postEvents(
+          toWrite.map((ref) => ({
+            id: newEventId(),
+            ts: now,
+            app: "selah-mcp",
+            kind: "highlight.set",
+            ref,
+            data: { color: col.id },
+          })),
+        );
+        return { added: label, color: col.id, colorName: col.name, verses };
       }
       case "set_highlight_color": {
         const { verses, label } = this.verses(args.reference);
-        const color = this.color(args.color);
-        const t = Math.floor(Date.now() / 1000);
-        const records = verses.map((v) => this.library.find("highlight", v) as Rec | null).filter((r): r is Rec => !!r);
-        if (!records.length) throw new Refusal(`Nothing in ${label} is highlighted.`);
-        await this.save(records.map((r) => ({ ...r, highlights: r.highlights.map((h) => ({ ...h, color, edited: t })) })));
-        return { recolored: label, color, colorName: this.colorName(color), verses: records.map((r) => r.ref) };
+        const col = this.resolveColor(boot, args.color);
+        const existing = new Set(boot.highlights.map((h) => h.ref));
+        const targets = verses.filter((v) => existing.has(v));
+        if (!targets.length) throw new Refusal(`Nothing in ${label} is highlighted.`);
+        await this.postEvents(
+          targets.map((ref) => ({
+            id: newEventId(),
+            ts: now,
+            app: "selah-mcp",
+            kind: "highlight.set",
+            ref,
+            data: { color: col.id },
+          })),
+        );
+        return { recolored: label, color: col.id, colorName: col.name, verses: targets };
       }
       case "delete_highlight": {
         const { verses, label } = this.verses(args.reference);
-        const records = verses.filter((v) => this.library.find("highlight", v));
-        if (!records.length) throw new Refusal(`Nothing in ${label} is highlighted.`);
-        await this.save(records.map((ref) => tombstone(ref)));
-        return { deleted: label, verses: records };
+        const existing = new Set(boot.highlights.map((h) => h.ref));
+        const targets = verses.filter((v) => existing.has(v));
+        if (!targets.length) throw new Refusal(`Nothing in ${label} is highlighted.`);
+        await this.postEvents(
+          targets.map((ref) => ({
+            id: newEventId(),
+            ts: now,
+            app: "selah-mcp",
+            kind: "highlight.removed",
+            ref,
+            data: {},
+          })),
+        );
+        return { deleted: label, verses: targets };
+      }
+      case "list_passages": {
+        const code = args.book !== undefined ? bookCode(String(args.book)) : null;
+        if (args.book !== undefined && !code) throw new Refusal("That isn't a book of the Bible.");
+        const passages = boot.passages
+          .filter((p) => !code || splitRef(p.ref)?.code === code)
+          .map((p) => ({
+            reference: labelRef(p.ref),
+            ref: p.ref,
+            createdTs: p.createdTs,
+            updatedTs: p.updatedTs,
+            link: link(p.ref),
+          }));
+        return { passages };
+      }
+      case "save_passage": {
+        const { refs, label } = this.passageRefs(args.reference);
+        await this.postEvents(
+          refs.map((ref) => ({
+            id: newEventId(),
+            ts: now,
+            app: "selah-mcp",
+            kind: "passage.saved",
+            ref,
+            data: { apps: {} },
+          })),
+        );
+        return {
+          saved: label,
+          passages: refs.map((ref) => ({ reference: labelRef(ref), ref, link: link(ref) })),
+        };
+      }
+      case "remove_passage": {
+        const { refs, label } = this.passageRefs(args.reference);
+        await this.postEvents(
+          refs.map((ref) => ({
+            id: newEventId(),
+            ts: now,
+            app: "selah-mcp",
+            kind: "passage.removed",
+            ref,
+            data: {},
+          })),
+        );
+        return { removed: label, refs };
       }
       case "list_colors": {
         const counts = new Map<string, number>();
-        for (const r of this.highlights()) counts.set(topColor(r, ids), (counts.get(topColor(r, ids)) ?? 0) + 1);
+        for (const h of boot.highlights) counts.set(h.color, (counts.get(h.color) ?? 0) + 1);
         return {
-          colors: this.colors.map((c) => ({ id: c.id, name: this.colorName(c.id), builtIn: c.builtIn, ...(c.hex ? { hex: c.hex } : {}), verses: counts.get(c.id) ?? 0 })),
+          colors: boot.colors.map((c) => ({
+            id: c.id,
+            name: c.name,
+            builtIn: c.builtIn,
+            ...(c.hex ? { hex: c.hex } : {}),
+            verses: counts.get(c.id) ?? 0,
+          })),
         };
       }
       case "get_library_info": {
-        const highlights = this.highlights();
         return {
-          name: this.library.syncedName,
-          highlightedVerses: highlights.length,
-          passages: this.runs(highlights).length,
-          notes: this.library.all("note").length,
-          colors: this.colors.length,
-          ownColors: this.colors.filter((c) => !c.builtIn).length,
+          id: boot.library.id,
+          name: boot.library.name,
+          seq: boot.seq,
+          highlightedVerses: boot.highlights.length,
+          highlightRanges: this.formatRuns(boot, boot.highlights).length,
+          passages: boot.passages.length,
+          savedPassages: boot.passages.length,
+          notes: boot.blocks.length,
+          srsCards: boot.srs.cards.length,
+          colors: boot.colors.length,
+          ownColors: boot.colors.filter((c) => !c.builtIn).length,
         };
       }
     }
@@ -355,18 +538,13 @@ class Session {
   }
 }
 
-class RpcFault extends Error {
-  constructor(readonly code: number, message: string) {
-    super(message);
-  }
-}
-
-/** "Romans", "rom", "ROM", "1 John", "Psalm" → a USFM code, or null. */
 export function bookCode(text: string): string | null {
   const t = text.trim().toLowerCase().replace(/\s+/g, " ");
   if (!t) return null;
-  const exact = BOOKS.find(([code, name]) => code.toLowerCase() === t || name.toLowerCase() === t || (code === "PSA" && t === "psalm"));
+  const exact = BOOKS.find(
+    ([code, name]) => code.toLowerCase() === t || name.toLowerCase() === t || (code === "PSA" && t === "psalm"),
+  );
   if (exact) return exact[0];
   const found = readPassage(`${text} 1:1`);
-  return found.error !== undefined ? null : splitRef(found.verses[0])?.code ?? null;
+  return found.error !== undefined ? null : (splitRef(found.verses[0])?.code ?? null);
 }

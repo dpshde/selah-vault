@@ -12,7 +12,7 @@ People want to open a highlighted passage in their preferred Bible app. route.bi
 
 ## Decision
 
-Records don't store links. Any app that wants one derives it: `https://route.bible/` followed by the lowercased `ref`. The web app shows an "Open" link on each highlight built this way. SPEC.md section 8 documents it as optional.
+Records don't store links. Any app that wants one derives it: `https://route.bible/` followed by the lowercased `ref`. The web app shows an "Open" link on each highlight built this way. `SPEC.md` section 4 documents it.
 
 ## Consequences
 
