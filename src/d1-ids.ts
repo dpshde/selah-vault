@@ -18,7 +18,7 @@ export const SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER = "00000000-0000-4000-a000-00000
 export const FORBIDDEN_V1_PROD_D1_ID = "4e60d989-d13b-4884-ad5c-1366f4c73f00";
 
 /**
- * Current configured id (placeholder until replaced with the real provisioned uuid).
- * When replacing, update this value AND the matching literal in `cloudflare.config.ts`.
+ * Current configured id for `selah-vault-auth`.
+ * When changing, update this value AND the matching literal in `cloudflare.config.ts`.
  */
-export const SELAH_VAULT_AUTH_D1_ID = SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER;
+export const SELAH_VAULT_AUTH_D1_ID = "a11255b0-2b5a-4174-9148-4c96be0d3a2a";

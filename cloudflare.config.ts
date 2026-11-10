@@ -4,7 +4,7 @@ import { bindings, defineConfig, exports } from "cf/config";
 // without Bun path mapping, so we cannot import that module here. Hygiene
 // fails if the id is still the placeholder or the forbidden live v1 prod id.
 const SELAH_VAULT_AUTH_D1_NAME = "selah-vault-auth";
-const SELAH_VAULT_AUTH_D1_ID = "00000000-0000-4000-a000-000000000000";
+const SELAH_VAULT_AUTH_D1_ID = "a11255b0-2b5a-4174-9148-4c96be0d3a2a";
 
 export default defineConfig({
 	accountId: "91ff2c2b757414041aeaa00896a8a43f",

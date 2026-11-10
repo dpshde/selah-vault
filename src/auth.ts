@@ -480,25 +480,34 @@ async function handlePasskeyLoginVerify(request: Request, env: AuthEnv, nowMs: n
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** True when Email OTP can actually deliver a code (test hook or Resend secret). */
+export function emailDeliveryConfigured(env: AuthEnv): boolean {
+  return typeof env.sendEmail === "function" || Boolean(env.RESEND_API_KEY);
+}
+
 async function dispatchEmail(env: AuthEnv, msg: EmailMessage): Promise<void> {
   if (env.sendEmail) {
     await env.sendEmail(msg);
     return;
   }
-  if (env.RESEND_API_KEY) {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "Selah Vault <auth@selah.tools>",
-        to: [msg.to],
-        subject: msg.subject,
-        text: msg.text,
-      }),
-    });
+  if (!env.RESEND_API_KEY) {
+    throw new Error("email delivery is not configured");
+  }
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "Selah Vault <auth@selah.tools>",
+      to: [msg.to],
+      subject: msg.subject,
+      text: msg.text,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`email provider returned ${res.status}`);
   }
 }
 
@@ -511,6 +520,11 @@ async function handleEmailSend(request: Request, env: AuthEnv, nowMs: number): P
   }
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   if (!EMAIL_RE.test(email) || email.length > 254) return json({ error: "invalid email" }, 400);
+
+  // Staging/workers.dev without RESEND_API_KEY must fail cleanly — never pretend to send.
+  if (!emailDeliveryConfigured(env)) {
+    return json({ error: "Email sign-in is not configured" }, 503);
+  }
 
   const ip = clientIp(request);
   const emailLimit = await bumpRateLimit(
@@ -564,12 +578,16 @@ async function handleEmailSend(request: Request, env: AuthEnv, nowMs: number): P
       .run();
   }
 
-  await dispatchEmail(env, {
-    to: email,
-    subject: `${code} is your Selah Vault sign-in code`,
-    text: `Your Selah Vault verification code is ${code}. It expires in 10 minutes.`,
-    code,
-  });
+  try {
+    await dispatchEmail(env, {
+      to: email,
+      subject: `${code} is your Selah Vault sign-in code`,
+      text: `Your Selah Vault verification code is ${code}. It expires in 10 minutes.`,
+      code,
+    });
+  } catch {
+    return json({ error: "Email sign-in is not configured" }, 503);
+  }
   return json({ sent: true });
 }
 

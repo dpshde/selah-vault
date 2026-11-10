@@ -315,6 +315,87 @@ describe("WebAuthn Passkeys (ES256 P-256)", () => {
   });
 });
 
+describe("Staging without RESEND_API_KEY / APPLE_CLIENT_ID", () => {
+  test("email OTP returns clear 503, Apple returns 503, and passkey sign-up still works", async () => {
+    // Mimic workers.dev staging: no email provider, no Apple client id, no sendEmail hook.
+    const h = createTestEnv({
+      sendEmail: undefined,
+      RESEND_API_KEY: undefined,
+      APPLE_CLIENT_ID: undefined,
+    });
+
+    const emailRes = await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "staging@selah.tools" }),
+    });
+    expect(emailRes.status).toBe(503);
+    expect(await emailRes.json()).toEqual({ error: "Email sign-in is not configured" });
+    expect(h.emails).toHaveLength(0);
+
+    const appleRes = await h.fetch("/auth/apple", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id_token: `${b64uEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", kid: "k" })))}.${b64uEncode(new TextEncoder().encode(JSON.stringify({ iss: "https://appleid.apple.com", aud: "x", sub: "s", exp: Math.floor(h.now / 1000) + 60 })))}.sig`,
+      }),
+    });
+    expect(appleRes.status).toBe(503);
+    expect(await appleRes.json()).toEqual({ error: "Apple sign-in is not configured" });
+
+    // Passkey registration must not depend on either secret.
+    const optRes = await h.fetch("/auth/passkey/register/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Staging Passkey" }),
+    });
+    expect(optRes.status).toBe(200);
+    const opts = (await optRes.json()) as { challenge: string };
+
+    const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const jwk = await crypto.subtle.exportKey("jwk", kp.publicKey);
+    const credIdBytes = crypto.getRandomValues(new Uint8Array(20));
+    const credId = b64uEncode(credIdBytes);
+    const coseKey = new Map<unknown, unknown>([
+      [1, 2],
+      [3, -7],
+      [-1, 1],
+      [-2, b64uDecode(jwk.x!)],
+      [-3, b64uDecode(jwk.y!)],
+    ]);
+    const coseBytes = cborEncode(coseKey);
+    const rpHash = await sha256Bytes("vault.selah.tools");
+    const authData = new Uint8Array(55 + credIdBytes.length + coseBytes.length);
+    authData.set(rpHash, 0);
+    authData[32] = 0x45;
+    authData[36] = 1;
+    authData[53] = 0;
+    authData[54] = credIdBytes.length;
+    authData.set(credIdBytes, 55);
+    authData.set(coseBytes, 55 + credIdBytes.length);
+    const attObj = cborEncode(new Map<unknown, unknown>([["fmt", "none"], ["authData", authData]]));
+    const clientDataReg = b64uEncode(
+      new TextEncoder().encode(JSON.stringify({ type: "webauthn.create", challenge: opts.challenge, origin: TEST_ORIGIN })),
+    );
+    const regRes = await h.fetch("/auth/passkey/register/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        credential: {
+          id: credId,
+          type: "public-key",
+          response: { clientDataJSON: clientDataReg, attestationObject: b64uEncode(attObj), transports: ["internal"] },
+        },
+      }),
+    });
+    expect(regRes.status).toBe(200);
+    const session = (await regRes.json()) as { token: string; user: { name: string } };
+    expect(session.token).toMatch(TOKEN_RE);
+    expect(session.user.name).toBe("Staging Passkey");
+    expect((await h.fetch("/v2/bootstrap", { headers: { authorization: `Bearer ${session.token}` } })).status).toBe(200);
+  });
+});
+
 describe("Sign in with Apple (RS256 JWKS)", () => {
   test("verifies Apple RS256 id_token against JWKS and links verified email accounts", async () => {
     const rsa = await crypto.subtle.generateKey(
