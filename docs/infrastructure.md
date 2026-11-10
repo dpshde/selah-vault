@@ -14,7 +14,7 @@ Selah Vault v2 runs entirely on Cloudflare Workers, SQLite Durable Objects, D1, 
 
 `cloudflare.config.ts` owns all Worker bindings, observability settings, and `runWorkerFirst` route patterns. When `cf dev` or `cf deploy` builds the bundle, Wrangler reads `wrangler.config.ts` to package `./public` into `env.ASSETS`.
 
-The D1 id lives in [`src/d1-ids.ts`](../src/d1-ids.ts). Hygiene fails if that id is still the unmet placeholder or the forbidden live v1 prod id. `mise run db:migrate:prod` always targets `selah-vault-auth` **by name**.
+The D1 id lives in [`src/d1-ids.ts`](../src/d1-ids.ts). Hygiene fails if that id is still the unmet placeholder or the forbidden live v1 prod id. `mise run db:migrate:prod` applies migrations with that **id** (`cf d1 migrations apply` no longer accepts a database name or `--remote`).
 
 ## 2. Fresh Cloudflare Account Bootstrap
 
@@ -32,7 +32,7 @@ cf login
 cf d1 create selah-vault-auth
 ```
 
-Copy the returned `uuid` into both `src/d1-ids.ts` and `cloudflare.config.ts` as `SELAH_VAULT_AUTH_D1_ID` (replace the placeholder in each). Confirm `accountId` in `cloudflare.config.ts`, then apply migrations remotely **by database name**:
+Copy the returned `uuid` into both `src/d1-ids.ts` and `cloudflare.config.ts` as `SELAH_VAULT_AUTH_D1_ID` (replace the placeholder in each). Confirm `accountId` in `cloudflare.config.ts`, then apply migrations remotely **by that id**:
 
 ```sh
 mise run db:migrate:prod
@@ -84,7 +84,7 @@ Local development requires zero cloud credentials:
 mise run dev
 ```
 
-`mise run dev` runs `scripts/d1-local.sh` (applying `migrations/` into `.wrangler/state` by database name `selah-vault-auth`) and starts `cf dev` at `http://localhost:8787` with local SQLite `LibraryDO`, local D1, and static assets. Optional local secrets go in `.dev.vars` (gitignored):
+`mise run dev` runs `scripts/d1-local.sh` (applying `migrations/` into `.wrangler/state` by the D1 id from `src/d1-ids.ts`) and starts `cf dev` at `http://localhost:8787` with local SQLite `LibraryDO`, local D1, and static assets. Optional local secrets go in `.dev.vars` (gitignored):
 
 ```ini
 YVP_PUBLIC_APP_KEY=your_youversion_key

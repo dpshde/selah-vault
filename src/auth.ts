@@ -1,6 +1,7 @@
 // Orthodox Authentication (WebAuthn Passkeys ES256, Sign in with Apple RS256, Email OTP)
 // and OAuth 2.1 Authorization Code + PKCE (S256) for Selah Vault v2.
 
+import { fetchStaticAsset } from "./assets";
 import {
   OAUTH_CODE_TTL_MS,
   OAUTH_GRANT_TTL_SEC,
@@ -772,7 +773,9 @@ export function oauthMetadata(origin: string) {
 function handleAuthorizeGet(request: Request, env: AuthEnv, url: URL): Promise<Response> | Response {
   const accept = request.headers.get("accept") ?? "";
   if (env.ASSETS && !accept.includes("application/json")) {
-    return env.ASSETS.fetch(new Request(new URL("/connect.html", url), request));
+    // Fetch the extensionless Assets path. Asking for /connect.html makes Assets
+    // 307 → /connect, which is runWorkerFirst and loops forever.
+    return fetchStaticAsset(env.ASSETS, request, "/connect");
   }
   const clientId = url.searchParams.get("client_id") ?? "";
   const redirectUri = url.searchParams.get("redirect_uri") ?? "";

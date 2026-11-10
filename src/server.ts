@@ -1,5 +1,6 @@
 // Selah Vault v2 HTTP router (pure Web Standards, zero cloudflare:workers import so Bun tests run directly).
 
+import { fetchStaticAsset } from "./assets";
 import { type AuthEnv, handleAuthAndOAuth } from "./auth";
 import { clearSessionCookieHeader, cookieWriteOriginError, extractTokenFromRequest } from "./clients";
 import { CORS_HEADERS } from "./library";
@@ -35,7 +36,7 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
   const isRead = request.method === "GET" || request.method === "HEAD";
 
   if (url.pathname === "/save" && env.ASSETS && isRead) {
-    return env.ASSETS.fetch(new Request(new URL("/", url), request));
+    return fetchStaticAsset(env.ASSETS, request, "/");
   }
   if (url.pathname === "/config.json" && isRead) {
     return json({ yvpPublicAppKey: env.YVP_PUBLIC_APP_KEY || null });
@@ -75,6 +76,6 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
     return doRes;
   }
 
-  if (env.ASSETS && isRead) return env.ASSETS.fetch(request);
+  if (env.ASSETS && isRead) return fetchStaticAsset(env.ASSETS, request);
   return json({ error: "not found" }, 404);
 }
