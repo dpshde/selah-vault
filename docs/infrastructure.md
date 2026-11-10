@@ -1,6 +1,6 @@
 # Cloudflare Infrastructure & Bootstrap Guide
 
-Selah Vault v2 runs entirely on Cloudflare Workers, SQLite Durable Objects, D1, R2, and Workers Static Assets, declared in [`cloudflare.config.ts`](../cloudflare.config.ts) and [`wrangler.config.ts`](../wrangler.config.ts).
+Selah Vault v2 runs entirely on Cloudflare Workers, SQLite Durable Objects, D1, and Workers Static Assets, declared in [`cloudflare.config.ts`](../cloudflare.config.ts) and [`wrangler.config.ts`](../wrangler.config.ts).
 
 ## 1. Resource Map
 
@@ -8,12 +8,13 @@ Selah Vault v2 runs entirely on Cloudflare Workers, SQLite Durable Objects, D1, 
 |---|---|---|
 | Worker | `selah-vault` (`src/worker.ts`) | Edge HTTP router (`/auth/*`, `/oauth/*`, `/v2/*`, `/mcp`, `/yv/*`, `/api/client-error`, `/config.json`) |
 | Durable Object | `env.LIBRARY` (`LibraryDO`, SQLite storage) | One isolated SQLite instance per user (`idFromName(userId)`): `events`, materialized tables, `FTS5` search, grant tokens, hibernating `/v2/ws` sockets |
-| D1 Database | `env.DB` (`selah-vault-auth`) | Global identity directory (`users`, `passkeys`, `auth_challenges`, `oauth_codes` from `migrations/0001_auth.sql`) |
-| R2 Bucket | `env.SNAPSHOTS` (`selah-vault-snapshots`) | Off-DO `.jsonl` library snapshots and disaster recovery exports |
+| D1 Database | `env.DB` (`selah-vault-auth`) | Global identity directory (`users`, `passkeys`, `auth_challenges`, `oauth_codes`, `rate_limits` from `migrations/`) |
 | Static Assets | `env.ASSETS` (`./public`) | Framework-free PWA (`index.html`, `unlock.html`, `connect.html`, `sync.js`, `grant-client.js`, self-hosted fonts, `_headers`) |
 | Companion Worker | `selah-jev` (`workers/selah-jev/`) | Optional passage lookup proxy backed by KV namespace `CAPS` (`selah-jev-caps`) and secret `TYPESAFE_API_KEY` |
 
 `cloudflare.config.ts` owns all Worker bindings, observability settings, and `runWorkerFirst` route patterns. When `cf dev` or `cf deploy` builds the bundle, Wrangler reads `wrangler.config.ts` to package `./public` into `env.ASSETS`.
+
+The D1 id lives in [`src/d1-ids.ts`](../src/d1-ids.ts). Hygiene fails if that id is still the unmet placeholder or the forbidden live v1 prod id. `mise run db:migrate:prod` always targets `selah-vault-auth` **by name**.
 
 ## 2. Fresh Cloudflare Account Bootstrap
 
@@ -31,26 +32,20 @@ cf login
 cf d1 create selah-vault-auth
 ```
 
-Copy the returned `uuid` and `accountId` into `cloudflare.config.ts` (`accountId` and `worker.env.DB`), then apply `migrations/0001_auth.sql` remotely:
+Copy the returned `uuid` into both `src/d1-ids.ts` and `cloudflare.config.ts` as `SELAH_VAULT_AUTH_D1_ID` (replace the placeholder in each). Confirm `accountId` in `cloudflare.config.ts`, then apply migrations remotely **by database name**:
 
 ```sh
 mise run db:migrate:prod
 ```
 
-### Step 2: Provision the `selah-vault-snapshots` R2 Bucket
-
-```sh
-cf r2 bucket create selah-vault-snapshots
-```
-
-### Step 3: Configure Worker Secrets
+### Step 2: Configure Worker Secrets
 
 Secrets are stored encrypted in Cloudflare and never committed to git:
 
 | Secret | Required | Used By |
 |---|---|---|
 | `RESEND_API_KEY` | Production Email OTP | `POST /auth/email/send` sends 6-digit codes via `https://api.resend.com/emails` (`from: Selah Vault <auth@selah.tools>`) |
-| `APPLE_CLIENT_ID` | Sign in with Apple | `POST /auth/apple` verifies the `aud` claim on Apple RS256 OIDC `id_token` JWTs |
+| `APPLE_CLIENT_ID` | Sign in with Apple | `POST /auth/apple` verifies the `aud` claim on Apple RS256 OIDC `id_token` JWTs (sign-in is disabled when unset) |
 | `YVP_PUBLIC_APP_KEY` | Optional BSB reader | Served at `GET /config.json` and injected by `GET /yv/*` YouVersion passage proxy |
 
 Set each secret interactively via Wrangler:
@@ -61,9 +56,9 @@ mise exec -- wrangler secret put APPLE_CLIENT_ID --name selah-vault
 mise exec -- wrangler secret put YVP_PUBLIC_APP_KEY --name selah-vault
 ```
 
-### Step 4: Deploy Worker & Attach Custom Domains
+### Step 3: Deploy Worker & Attach Custom Domains
 
-Deploy `selah-vault` (which automatically creates the SQLite `LibraryDO` Durable Object migration on first deploy):
+Deploy `selah-vault` (which automatically creates the SQLite `LibraryDO` Durable Object migration on first deploy) to `workers.dev` first. Attach custom domains only after `route.bible` and MCP clients work on v2 — see [`production-rollout.md`](./production-rollout.md).
 
 ```sh
 mise run check
@@ -89,7 +84,7 @@ Local development requires zero cloud credentials:
 mise run dev
 ```
 
-`mise run dev` runs `scripts/d1-local.sh` (applying `migrations/0001_auth.sql` into `.wrangler/state`) and starts `cf dev` at `http://localhost:8787` with local SQLite `LibraryDO`, local D1, local R2, and static assets. Optional local secrets go in `.dev.vars` (gitignored):
+`mise run dev` runs `scripts/d1-local.sh` (applying `migrations/` into `.wrangler/state` by database name `selah-vault-auth`) and starts `cf dev` at `http://localhost:8787` with local SQLite `LibraryDO`, local D1, and static assets. Optional local secrets go in `.dev.vars` (gitignored):
 
 ```ini
 YVP_PUBLIC_APP_KEY=your_youversion_key
@@ -107,4 +102,3 @@ mise exec -- wrangler kv namespace create selah-jev-caps
 mise exec -- wrangler secret put TYPESAFE_API_KEY -c workers/selah-jev/wrangler.toml
 mise exec -- wrangler deploy -c workers/selah-jev/wrangler.toml
 ```
-

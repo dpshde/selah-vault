@@ -1,5 +1,11 @@
 import { bindings, defineConfig, exports } from "cf/config";
 
+// Keep these literals in sync with src/d1-ids.ts. Wrangler loads this file
+// without Bun path mapping, so we cannot import that module here. Hygiene
+// fails if the id is still the placeholder or the forbidden live v1 prod id.
+const SELAH_VAULT_AUTH_D1_NAME = "selah-vault-auth";
+const SELAH_VAULT_AUTH_D1_ID = "00000000-0000-4000-a000-000000000000";
+
 export default defineConfig({
 	accountId: "91ff2c2b757414041aeaa00896a8a43f",
 	worker: {
@@ -33,16 +39,15 @@ export default defineConfig({
 		},
 		env: {
 			DB: bindings.d1({
-				name: "selah-vault-auth",
-				id: "4e60d989-d13b-4884-ad5c-1366f4c73f00",
+				name: SELAH_VAULT_AUTH_D1_NAME,
+				// Replace with the real selah-vault-auth uuid in BOTH this file
+				// and src/d1-ids.ts once provisioned.
+				id: SELAH_VAULT_AUTH_D1_ID,
 			}),
 			ASSETS: bindings.assets(),
 			LIBRARY: bindings.durableObject({
 				worker: "selah-vault",
 				exportName: "LibraryDO",
-			}),
-			SNAPSHOTS: bindings.r2({
-				name: "selah-vault-snapshots",
 			}),
 		},
 		exports: {

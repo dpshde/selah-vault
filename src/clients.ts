@@ -185,6 +185,28 @@ export function extractTokenFromRequest(request: Request, allowQueryOrWs = false
   return parseToken(readCookie(request.headers.get("cookie"), SESSION_COOKIE));
 }
 
+/** True when the request carries an Authorization Bearer token (not merely a session cookie). */
+export function hasBearerAuthorization(request: Request): boolean {
+  return /^Bearer\s+\S+/i.test((request.headers.get("authorization") ?? "").trim());
+}
+
+/**
+ * Cookie-authenticated state-changing `/v2` requests must present an Origin that
+ * exactly matches the Worker origin. Bearer tokens skip this check (SPA/API clients).
+ * Returns an error message when the check fails, otherwise null.
+ */
+export function cookieWriteOriginError(request: Request): string | null {
+  const method = request.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return null;
+  if (hasBearerAuthorization(request)) return null;
+  const cookie = request.headers.get("cookie");
+  if (!cookie || !readCookie(cookie, SESSION_COOKIE)) return null;
+  const origin = request.headers.get("origin");
+  const expected = new URL(request.url).origin;
+  if (!origin || origin !== expected) return "csrf origin mismatch";
+  return null;
+}
+
 export function b64uEncode(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);

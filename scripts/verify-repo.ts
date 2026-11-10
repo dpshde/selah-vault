@@ -2,10 +2,49 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { SCOPES, consentLines } from "../public/grants.js";
+import {
+  FORBIDDEN_V1_PROD_D1_ID,
+  SELAH_VAULT_AUTH_D1_ID,
+  SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER,
+  SELAH_VAULT_AUTH_D1_NAME,
+} from "../src/d1-ids";
 
 const BINARY_EXT = /\.(png|ico|webp|woff2?|jpg|jpeg|gif)$/i;
 const legacyPattern = new RegExp(["hidden", "[-_ ]", "word"].join(""), "i");
 const failures: string[] = [];
+
+// 0. D1 binding must not point at the live v1 prod database or the unmet placeholder,
+// and cloudflare.config.ts must stay in sync with src/d1-ids.ts (Wrangler cannot import it).
+const configSrc = readFileSync("cloudflare.config.ts", "utf8");
+const configId = configSrc.match(/const SELAH_VAULT_AUTH_D1_ID\s*=\s*"([^"]+)"/)?.[1] ?? null;
+const configName = configSrc.match(/const SELAH_VAULT_AUTH_D1_NAME\s*=\s*"([^"]+)"/)?.[1] ?? null;
+if (!configId || !configName) {
+  failures.push("cloudflare.config.ts must declare SELAH_VAULT_AUTH_D1_ID and SELAH_VAULT_AUTH_D1_NAME literals");
+} else {
+  if (configName !== SELAH_VAULT_AUTH_D1_NAME) {
+    failures.push(`cloudflare.config.ts D1 name ${configName} must equal ${SELAH_VAULT_AUTH_D1_NAME}`);
+  }
+  if (configId !== SELAH_VAULT_AUTH_D1_ID) {
+    failures.push(`cloudflare.config.ts D1 id must match src/d1-ids.ts (${SELAH_VAULT_AUTH_D1_ID})`);
+  }
+  if (configId === FORBIDDEN_V1_PROD_D1_ID || SELAH_VAULT_AUTH_D1_ID === FORBIDDEN_V1_PROD_D1_ID) {
+    failures.push(
+      `DB id must not be the live v1 prod D1 (${FORBIDDEN_V1_PROD_D1_ID})`,
+    );
+  }
+  if (configId === SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER || SELAH_VAULT_AUTH_D1_ID === SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER) {
+    failures.push(
+      `DB id is still the placeholder (${SELAH_VAULT_AUTH_D1_ID_PLACEHOLDER}); replace with the real ${SELAH_VAULT_AUTH_D1_NAME} uuid in src/d1-ids.ts and cloudflare.config.ts before deploy`,
+    );
+  }
+}
+if (/\bSNAPSHOTS\b/.test(configSrc) || /selah-vault-snapshots/.test(configSrc)) {
+  failures.push("Unused SNAPSHOTS / selah-vault-snapshots binding must stay removed from cloudflare.config.ts");
+}
+const migrateProd = readFileSync("mise.toml", "utf8");
+if (!migrateProd.includes(`db:migrate:prod`) || !migrateProd.includes(SELAH_VAULT_AUTH_D1_NAME)) {
+  failures.push(`mise db:migrate:prod must target D1 by name (${SELAH_VAULT_AUTH_D1_NAME})`);
+}
 
 // 1. Zero legacy product identifier matches across tracked text files (excluding bun.lock).
 const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8" })
