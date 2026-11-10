@@ -14,7 +14,7 @@ Selah Vault uses [`mise`](https://mise.jdx.dev/) ([`mise.toml`](../mise.toml)) a
 | `mise run jev:dry-run` | Bundles and validates `workers/selah-jev` via `wrangler deploy --dry-run` |
 | `mise run check` | Runs `hygiene`, `typecheck`, `test`, `dry-run`, and `jev:dry-run` in sequence |
 | `mise run db:migrate:local` | Applies `migrations/` to local `.wrangler/state` via `scripts/d1-local.sh` |
-| `mise run db:migrate:prod` | Applies `migrations/` to remote D1 **by name** `selah-vault-auth` (never by uuid) |
+| `mise run db:migrate:prod` | Applies `migrations/` via `scripts/d1-migrate-prod.sh` using the D1 **id** from `src/d1-ids.ts` (`cf` requires id; no `--remote`) |
 | `mise run verify` | Runs `scripts/verify-assets.ts https://vault.selah.tools` to confirm live asset hashes and security headers |
 | `mise run deploy` | Runs `check` -> `db:migrate:prod` -> `cf deploy` -> `verify` |
 

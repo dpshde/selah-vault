@@ -41,9 +41,24 @@ if (!configId || !configName) {
 if (/\bSNAPSHOTS\b/.test(configSrc) || /selah-vault-snapshots/.test(configSrc)) {
   failures.push("Unused SNAPSHOTS / selah-vault-snapshots binding must stay removed from cloudflare.config.ts");
 }
-const migrateProd = readFileSync("mise.toml", "utf8");
-if (!migrateProd.includes(`db:migrate:prod`) || !migrateProd.includes(SELAH_VAULT_AUTH_D1_NAME)) {
-  failures.push(`mise db:migrate:prod must target D1 by name (${SELAH_VAULT_AUTH_D1_NAME})`);
+const migrateProdTask = readFileSync("mise.toml", "utf8");
+const migrateProdSh = existsSync("scripts/d1-migrate-prod.sh") ? readFileSync("scripts/d1-migrate-prod.sh", "utf8") : "";
+const migrateLocalSh = existsSync("scripts/d1-local.sh") ? readFileSync("scripts/d1-local.sh", "utf8") : "";
+if (!migrateProdTask.includes("db:migrate:prod") || !migrateProdTask.includes("d1-migrate-prod.sh")) {
+  failures.push("mise db:migrate:prod must run scripts/d1-migrate-prod.sh");
+}
+if (!migrateProdSh.includes("SELAH_VAULT_AUTH_D1_ID") || !migrateProdSh.includes("src/d1-ids")) {
+  failures.push("scripts/d1-migrate-prod.sh must apply migrations using SELAH_VAULT_AUTH_D1_ID from src/d1-ids.ts");
+}
+const migrateProdCmds = migrateProdSh
+  .split("\n")
+  .filter((line) => !/^\s*#/.test(line))
+  .join("\n");
+if (/\bcf d1 migrations apply\s+selah-vault-auth\b/.test(migrateProdCmds) || /(?:^|\s)--remote(?:\s|$)/.test(migrateProdCmds)) {
+  failures.push("scripts/d1-migrate-prod.sh must pass the D1 id (not the name) and must not use --remote");
+}
+if (!migrateLocalSh.includes("SELAH_VAULT_AUTH_D1_ID") || !migrateLocalSh.includes("src/d1-ids")) {
+  failures.push("scripts/d1-local.sh must apply migrations using SELAH_VAULT_AUTH_D1_ID from src/d1-ids.ts");
 }
 
 // 1. Zero legacy product identifier matches across tracked text files (excluding bun.lock).

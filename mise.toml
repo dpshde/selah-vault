@@ -17,8 +17,8 @@ description = "Apply D1 auth migrations to local .wrangler/state"
 run = "sh scripts/d1-local.sh"
 
 [tasks."db:migrate:prod"]
-description = "Apply D1 auth migrations to production by binding name (selah-vault-auth), never by uuid"
-run = "cf d1 migrations apply selah-vault-auth --remote --dir migrations"
+description = "Apply D1 auth migrations to production by id from src/d1-ids.ts (cf requires id, not name)"
+run = "sh scripts/d1-migrate-prod.sh"
 
 [tasks.dev]
 description = "Start local Worker + D1 + Durable Objects at http://localhost:8787"

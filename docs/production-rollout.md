@@ -30,7 +30,7 @@ Provision v2 resources alongside the live v1 Worker without touching `vault.sela
 cf d1 create selah-vault-auth
 # Put the returned uuid into src/d1-ids.ts AND cloudflare.config.ts (SELAH_VAULT_AUTH_D1_ID), then:
 mise run hygiene   # must pass once the real id replaces the placeholder
-mise run db:migrate:prod   # targets selah-vault-auth by name, never by uuid
+mise run db:migrate:prod   # applies by id from src/d1-ids.ts (`cf` requires id)
 
 # 2. Configure production secrets on selah-vault
 mise exec -- wrangler secret put RESEND_API_KEY --name selah-vault
