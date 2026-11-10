@@ -1164,14 +1164,78 @@ button.wide { width: 100%; padding: .8125rem 1rem; }
 .account-identity strong { display: block; font-size: 1.125rem; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .account-identity small { display: block; color: var(--muted); font-size: .875rem; margin-top: .25rem; overflow-wrap: anywhere; }
 #account .grants-panel { border-bottom: 0; padding-bottom: 0; }
-#methods-empty { margin: 0 0 .75rem; font-size: .875rem; }
-#methods-add { margin: .75rem 0 0; }
-.link-email-form { display: grid; gap: .625rem; margin: .75rem 0 0; }
+#methods-signed-out { margin: 0 0 .75rem; font-size: .875rem; }
+#methods-signed-out[hidden] { display: none; }
+.method-slots { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; width: 100%; }
+.method-slot {
+  display: grid;
+  gap: .625rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: .75rem;
+  background: var(--raised);
+  border: 1px solid var(--line-subtle);
+}
+.method-slot.is-unavailable { color: var(--muted); }
+.method-slot-head { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.method-slot-icon { flex: none; display: block; color: var(--fg); }
+.method-slot-icon-fill { fill: currentColor; stroke: none; }
+.method-slot.is-unavailable .method-slot-icon { color: var(--muted); }
+.method-slot-copy { flex: 1 1 auto; min-width: 0; }
+.method-slot-copy strong { display: block; font-weight: 600; font-size: .9375rem; letter-spacing: -.01em; }
+.method-slot-status {
+  display: inline-flex;
+  align-items: center;
+  margin-top: .2rem;
+  padding: .1rem .4rem;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-label, inherit);
+  font-size: .6875rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+.method-slot-status.is-on {
+  color: var(--fg);
+  border-color: color-mix(in oklab, var(--fg) 35%, var(--line));
+}
+.method-slot-actions { display: flex; flex-wrap: wrap; gap: .375rem; flex: none; align-items: center; margin-left: auto; }
+.method-slot-actions:empty { display: none; }
+.method-slot-actions > button { padding: .4375rem .75rem; }
+.method-slot-detail { margin: 0; font-size: .875rem; overflow-wrap: anywhere; }
+.method-slot-detail[hidden],
+.method-slot-hint[hidden],
+.method-slot-rows[hidden],
+.method-slot-rows:empty { display: none; }
+.method-slot-hint { margin: 0; font-size: .78rem; color: var(--muted); }
+.method-slot-rows { list-style: none; margin: 0; padding: .125rem 0 0; display: grid; gap: .375rem; border-top: 1px solid var(--line-subtle); }
+.method-slot-rows li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .5rem 0 0;
+  font-size: .875rem;
+}
+.method-slot-rows .grant-meta { min-width: 0; flex: 1; }
+.method-slot-rows .grant-meta strong { display: block; font-weight: 600; }
+.method-slot-rows .grant-meta small { display: block; color: var(--muted); font-size: .78rem; text-transform: none; letter-spacing: 0; }
+.passkey-row-view { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; min-width: 0; }
+.passkey-row-view[hidden] { display: none; }
+.passkey-rename { display: inline-flex; align-items: center; gap: .375rem; }
+.passkey-rename svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.passkey-rename-form { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; width: 100%; }
+.passkey-rename-form[hidden] { display: none; }
+.passkey-rename-form input { flex: 1 1 8rem; min-width: 0; box-sizing: border-box; }
+.link-email-form { display: grid; gap: .625rem; margin: .125rem 0 0; }
 .link-email-form[hidden] { display: none; }
 .link-email-form label { display: grid; gap: .375rem; font-size: .875rem; }
 .link-email-form input { width: 100%; box-sizing: border-box; }
 .account-logout { width: 100%; margin-top: 1.5rem; min-height: 2.625rem; text-align: center; }
-.methods-list .grant-meta small { text-transform: none; letter-spacing: 0; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.quiet:disabled:hover { background: transparent; border-color: var(--line); }
 #start.has-passkey #unlock-form button[type="submit"] { background: transparent; color: var(--fg); border-color: var(--line); }
 #start.has-passkey #unlock-form button[type="submit"]:hover { background: var(--hover); border-color: var(--hover-line); }
 #start label.light { font-size: .8125rem; }
@@ -1507,7 +1571,6 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   }
   #backup .backup-actions > button,
   #sync .sync-actions > button,
-  #account .sync-actions > button,
   #sync #erase,
   #account .account-logout {
     min-height: 48px;
@@ -1517,8 +1580,7 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   #sync #erase {
     width: 100%;
   }
-  #sync .sync-actions,
-  #account .sync-actions {
+  #sync .sync-actions {
     display: flex;
     flex-wrap: wrap;
     gap: .5rem;
@@ -1526,16 +1588,42 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     margin: 0 0 1rem;
     padding: 0;
   }
-  #account .sync-actions > button {
-    flex: 1 1 calc(50% - .5rem);
-    min-width: 0;
+  #account .method-slot {
+    padding: .875rem;
   }
-  #account .methods-list li {
+  #account .method-slot-head {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  #account .method-slot-actions {
+    flex: none;
+    margin-left: auto;
+    width: auto;
+  }
+  #account .method-slot-actions > button,
+  #account .method-slot-rows button {
     min-height: 48px;
-    width: 100%;
     box-sizing: border-box;
-    padding: .75rem .875rem;
+    padding: .625rem .75rem;
   }
+  #account .method-slot-actions > button { flex: none; min-width: 0; }
+  #account .method-slot-rows li {
+    flex-wrap: wrap;
+    min-height: 48px;
+    padding: .625rem 0 0;
+    gap: .5rem;
+  }
+  #account .passkey-row-view { flex-wrap: wrap; width: 100%; }
+  #account .method-slot-rows button,
+  #account .passkey-rename-form button,
+  #account .passkey-rename-form input {
+    min-height: 48px;
+    box-sizing: border-box;
+  }
+  #account .method-slot-rows .method-slot-actions { flex: 1 1 100%; margin-left: 0; width: 100%; }
+  #account .method-slot-rows .method-slot-actions > button { flex: 1 1 auto; min-width: 0; }
+  #account .passkey-rename-form input { flex: 1 1 100%; font-size: 1rem; }
+  #account .passkey-rename-form button { flex: 1 1 auto; }
   #account .account-identity {
     padding: .25rem 0 1.125rem;
   }
@@ -1547,11 +1635,15 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     box-sizing: border-box;
   }
   #account .link-email-form label,
-  #account .link-email-form input {
+  #account .link-email-form input,
+  #account .link-email-form .row,
+  #account .link-email-form .row > button {
     width: 100%;
     box-sizing: border-box;
   }
-  #account .link-email-form input { min-height: 48px; font-size: 1rem; }
+  #account .link-email-form input,
+  #account .link-email-form .row > button { min-height: 48px; }
+  #account .link-email-form input { font-size: 1rem; }
   #key-reveal .icon {
     min-width: 44px;
     height: 44px;
