@@ -61,15 +61,13 @@
       <details id="menu">
         <summary aria-label="Menu">•••</summary>
         <div>
-          <button type="button" id="open-sync">Sync</button>
-          <button type="button" id="open-colors">Colors</button>
-          <button type="button" id="open-backup">Backup</button>
-          <hr>
-          <button type="button" class="theme-toggle menu-theme" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
-          <a class="menu-link" href="https://github.com/dpshde/selah-vault/blob/main/SPEC.md" target="_blank" rel="noopener">Contract</a>
+          <button type="button" id="open-sync"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M3.5 12A8.5 8.5 0 0 1 17.8 5.8L21 9"/><path d="M21 4v5h-5"/><path d="M20.5 12A8.5 8.5 0 0 1 6.2 18.2L3 15"/><path d="M3 20v-5h5"/></svg><span>Sync</span></button>
+          <button type="button" id="open-colors"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M12 3.5s6 6.4 6 10.3A6 6 0 1 1 6 13.8C6 9.9 12 3.5 12 3.5Z"/></svg><span>Colors</span></button>
+          <button type="button" id="open-backup"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M12 4v11"/><path d="m8 11 4 4 4-4"/><path d="M5 19h14"/></svg><span>Backup</span></button>
+          <button type="button" id="open-account"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><circle cx="12" cy="8" r="3.25"/><path d="M6 19.2c1.4-2.8 3.5-4.2 6-4.2s4.6 1.4 6 4.2"/></svg><span>Account</span></button>
           <hr class="menu-extra">
-          <span class="menu-status" id="menu-auth-status" hidden></span>
-          <button type="button" id="lock">Log out</button>
+          <button type="button" class="theme-toggle menu-theme" aria-label="Switch to dark mode" title="Switch to dark mode"></button>
+          <a class="menu-link" href="https://github.com/dpshde/selah-vault/blob/main/SPEC.md" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg><span>Contract</span></a>
         </div>
       </details>
     </header>
@@ -183,10 +181,6 @@
       <button type="button" class="back panel-close" aria-label="Close">Close</button>
     </header>
     <div class="panel-body">
-      <div class="row sync-actions">
-        <button type="button" id="add-passkey">Add passkey</button>
-      </div>
-      <p class="status-line" id="access-note" role="status"></p>
       <label class="check"><input type="checkbox" role="switch" id="use-server" aria-checked="true"> <span>Across devices<small>Synced to your Selah Vault account.</small></span></label>
       <div class="grants-panel" id="grants-section">
         <h2 class="subhead">Connected apps</h2>
@@ -199,6 +193,47 @@
         <button type="button" id="erase" class="quiet danger">Erase library</button>
       </details>
       <p id="dev-links"><span>For developers</span><span><a href="https://github.com/dpshde/selah-vault/blob/main/SPEC.md" target="_blank" rel="noopener">Spec</a> · <a href="https://github.com/dpshde/selah-vault/blob/main/docs/quickstart.md" target="_blank" rel="noopener">Quick start</a></span></p>
+    </div>
+    <div class="panel-foot"><button type="button" class="back">Done</button></div>
+  </section>
+
+  <section id="account" class="settings-panel" hidden>
+    <header class="panel-head">
+      <h1>Account</h1>
+      <button type="button" class="back panel-close" aria-label="Close">Close</button>
+    </header>
+    <div class="panel-body">
+      <div class="account-identity">
+        <strong id="account-display-name"></strong>
+        <small id="account-display-email"></small>
+      </div>
+      <div class="grants-panel" id="methods-section">
+        <h2 class="subhead">Sign-in methods</h2>
+        <ul id="methods-list" class="grants-list methods-list"></ul>
+        <p class="quiet-text" id="methods-empty">Sign in to manage sign-in methods.</p>
+        <div class="row sync-actions" id="methods-add">
+          <button type="button" id="add-passkey">Add passkey</button>
+          <button type="button" id="add-email" class="quiet">Add email</button>
+          <button type="button" id="add-apple" class="quiet" hidden>Add Apple</button>
+        </div>
+        <form id="link-email-send-form" class="link-email-form" hidden>
+          <label for="link-email-input">Email address <input id="link-email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
+          <div class="row">
+            <button type="submit" class="quiet">Send code</button>
+            <button type="button" id="link-email-cancel" class="link">Cancel</button>
+          </div>
+        </form>
+        <form id="link-email-verify-form" class="link-email-form" hidden>
+          <p class="quiet-text" id="link-email-sent-note"></p>
+          <label for="link-otp-input">6-digit code <input id="link-otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
+          <div class="row">
+            <button type="submit">Verify code</button>
+            <button type="button" id="link-email-back" class="quiet">Change email</button>
+          </div>
+        </form>
+        <p class="status-line" id="account-note" role="status"></p>
+      </div>
+      <button type="button" id="lock" class="quiet danger account-logout">Log out</button>
     </div>
     <div class="panel-foot"><button type="button" class="back">Done</button></div>
   </section>

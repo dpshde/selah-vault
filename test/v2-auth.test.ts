@@ -594,3 +594,296 @@ describe("OAuth 2.1 + PKCE (S256)", () => {
     expect((await h.fetch("/v2/bootstrap", { headers: { authorization: `Bearer ${tok.access_token}` } })).status).toBe(401);
   });
 });
+
+async function registerPasskeySession(h: ReturnType<typeof createTestEnv>, name = "Key Vault") {
+  const optRes = await h.fetch("/auth/passkey/register/options", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const opts = (await optRes.json()) as { challenge: string };
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = await crypto.subtle.exportKey("jwk", kp.publicKey);
+  const credIdBytes = crypto.getRandomValues(new Uint8Array(20));
+  const credId = b64uEncode(credIdBytes);
+  const coseKey = new Map<unknown, unknown>([
+    [1, 2],
+    [3, -7],
+    [-1, 1],
+    [-2, b64uDecode(jwk.x!)],
+    [-3, b64uDecode(jwk.y!)],
+  ]);
+  const coseBytes = cborEncode(coseKey);
+  const rpHash = await sha256Bytes("vault.selah.tools");
+  const authData = new Uint8Array(55 + credIdBytes.length + coseBytes.length);
+  authData.set(rpHash, 0);
+  authData[32] = 0x45;
+  authData[36] = 1;
+  authData[53] = 0;
+  authData[54] = credIdBytes.length;
+  authData.set(credIdBytes, 55);
+  authData.set(coseBytes, 55 + credIdBytes.length);
+  const attObj = cborEncode(new Map<unknown, unknown>([["fmt", "none"], ["authData", authData]]));
+  const clientDataReg = b64uEncode(
+    new TextEncoder().encode(JSON.stringify({ type: "webauthn.create", challenge: opts.challenge, origin: TEST_ORIGIN })),
+  );
+  const regRes = await h.fetch("/auth/passkey/register/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      credential: {
+        id: credId,
+        type: "public-key",
+        response: { clientDataJSON: clientDataReg, attestationObject: b64uEncode(attObj), transports: ["internal"] },
+      },
+    }),
+  });
+  const body = (await regRes.json()) as { token: string; user: { id: string; email: string | null; name: string } };
+  const cookie = regRes.headers.get("set-cookie")?.split(";")[0] ?? "";
+  return { status: regRes.status, token: body.token, user: body.user, cookie, credId };
+}
+
+async function mintAppleToken(
+  rsa: CryptoKeyPair,
+  claims: Record<string, unknown>,
+  kid = "apple-k1",
+) {
+  const header = b64uEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", kid })));
+  const payload = b64uEncode(new TextEncoder().encode(JSON.stringify(claims)));
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("RSASSA-PKCS1-v1_5", rsa.privateKey, new TextEncoder().encode(`${header}.${payload}`)),
+  );
+  return `${header}.${payload}.${b64uEncode(sig)}`;
+}
+
+describe("Linking sign-in methods to one account", () => {
+  test("GET /config.json reports whether Apple and email delivery are configured", async () => {
+    const off = createTestEnv({ sendEmail: undefined, RESEND_API_KEY: undefined, APPLE_CLIENT_ID: undefined });
+    const offCfg = (await (await off.fetch("/config.json")).json()) as {
+      appleClientId: string | null;
+      emailConfigured: boolean;
+    };
+    expect(offCfg.appleClientId).toBeNull();
+    expect(offCfg.emailConfigured).toBe(false);
+
+    const on = createTestEnv({ APPLE_CLIENT_ID: "tools.selah.vault" });
+    const onCfg = (await (await on.fetch("/config.json")).json()) as {
+      appleClientId: string | null;
+      emailConfigured: boolean;
+    };
+    expect(onCfg.appleClientId).toBe("tools.selah.vault");
+    expect(onCfg.emailConfigured).toBe(true);
+  });
+
+  test("unauthenticated GET /auth/methods is 401", async () => {
+    const h = createTestEnv();
+    expect((await h.fetch("/auth/methods")).status).toBe(401);
+  });
+
+  test("verifying email while signed in links it to the same user and does not create another", async () => {
+    const h = createTestEnv();
+    const passkey = await registerPasskeySession(h, "Passkey Only");
+    expect(passkey.status).toBe(200);
+    expect(passkey.user.email).toBeNull();
+
+    const send = await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "linked@selah.tools" }),
+    });
+    expect(send.status).toBe(200);
+    const verify = await h.fetch("/auth/email/verify", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${passkey.token}`,
+        origin: TEST_ORIGIN,
+      },
+      body: JSON.stringify({ email: "linked@selah.tools", code: h.emails[0]!.code }),
+    });
+    expect(verify.status).toBe(200);
+    const body = (await verify.json()) as { user: { id: string; email: string } };
+    expect(body.user.id).toBe(passkey.user.id);
+    expect(body.user.email).toBe("linked@selah.tools");
+
+    const methods = await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${passkey.token}` } });
+    expect(methods.status).toBe(200);
+    const listed = (await methods.json()) as { email: string; passkeys: Array<{ id: string; suffix: string }> };
+    expect(listed.email).toBe("linked@selah.tools");
+    expect(listed.passkeys).toHaveLength(1);
+    expect(listed.passkeys[0]!.id).toBe(passkey.credId);
+    expect(listed.passkeys[0]!.suffix).toBeTruthy();
+
+    const users = h.authDb.query("SELECT COUNT(*) AS n FROM users").get() as { n: number };
+    expect(users.n).toBe(1);
+  });
+
+  test("linking an email already owned by another account returns 409 and leaves both users alone", async () => {
+    const h = createTestEnv();
+    const owner = await h.createUserSession("taken@selah.tools", "Owner");
+    const other = await registerPasskeySession(h, "Other");
+
+    await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "taken@selah.tools" }),
+    });
+    const res = await h.fetch("/auth/email/verify", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${other.token}`,
+      },
+      body: JSON.stringify({ email: "taken@selah.tools", code: h.emails[h.emails.length - 1]!.code }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "already linked to another account" });
+
+    const methods = (await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${other.token}` } })).json()) as {
+      email: string | null;
+    };
+    expect(methods.email).toBeNull();
+    const ownerMe = await h.fetch("/auth/me", { headers: { authorization: `Bearer ${owner.token}` } });
+    expect(((await ownerMe.json()) as { user: { email: string; id: string } }).user).toEqual({
+      id: owner.user.id,
+      email: "taken@selah.tools",
+      name: "Owner",
+    });
+    expect((h.authDb.query("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n).toBe(2);
+  });
+
+  test("cookie-authenticated email verify without a matching Origin is rejected with 403 before linking", async () => {
+    const h = createTestEnv();
+    const passkey = await registerPasskeySession(h, "CSRF");
+    await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "csrf-link@selah.tools" }),
+    });
+    const res = await h.fetch("/auth/email/verify", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: passkey.cookie,
+      },
+      body: JSON.stringify({ email: "csrf-link@selah.tools", code: h.emails[0]!.code }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "csrf origin mismatch" });
+  });
+
+  test("Apple sign-in while signed in attaches apple_sub to the session user", async () => {
+    const rsa = await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const pubJwk = await crypto.subtle.exportKey("jwk", rsa.publicKey);
+    const h = createTestEnv({
+      APPLE_CLIENT_ID: "tools.selah.vault",
+      fetchJwks: (async () =>
+        new Response(JSON.stringify({ keys: [{ ...pubJwk, kid: "apple-k1", alg: "RS256", use: "sig" }] }), {
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    });
+    const passkey = await registerPasskeySession(h, "Apple Link");
+    const idToken = await mintAppleToken(rsa, {
+      iss: "https://appleid.apple.com",
+      aud: "tools.selah.vault",
+      sub: "apple-user-link",
+      email: "relay@privaterelay.appleid.com",
+      email_verified: true,
+      exp: Math.floor(h.now / 1000) + 600,
+    });
+    const res = await h.fetch("/auth/apple", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${passkey.token}`,
+      },
+      body: JSON.stringify({ id_token: idToken }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { id: string; email: string } };
+    expect(body.user.id).toBe(passkey.user.id);
+    expect(body.user.email).toBe("relay@privaterelay.appleid.com");
+    const methods = (await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${passkey.token}` } })).json()) as {
+      apple: boolean;
+      appleConfigured: boolean;
+      email: string;
+    };
+    expect(methods.apple).toBe(true);
+    expect(methods.appleConfigured).toBe(true);
+    expect(methods.email).toBe("relay@privaterelay.appleid.com");
+    expect(JSON.stringify(methods)).not.toContain("apple-user-link");
+    expect((h.authDb.query("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n).toBe(1);
+  });
+
+  test("listing methods includes passkeys and refuses to remove the last remaining method", async () => {
+    const h = createTestEnv();
+    const owner = await h.createUserSession("solo@selah.tools", "Solo");
+    const listed = await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${owner.token}` } });
+    expect(listed.status).toBe(200);
+    const body = (await listed.json()) as { email: string; apple: boolean; passkeys: unknown[] };
+    expect(body.email).toBe("solo@selah.tools");
+    expect(body.apple).toBe(false);
+    expect(body.passkeys).toEqual([]);
+
+    const removed = await h.fetch("/auth/methods/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ type: "email" }),
+    });
+    expect(removed.status).toBe(400);
+    expect(await removed.json()).toEqual({ error: "cannot remove the last sign-in method" });
+    expect(
+      ((await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${owner.token}` } })).json()) as { email: string })
+        .email,
+    ).toBe("solo@selah.tools");
+  });
+
+  test("removing a passkey only deletes one owned by the current user", async () => {
+    const h = createTestEnv();
+    const a = await registerPasskeySession(h, "Alice");
+    const b = await registerPasskeySession(h, "Bob");
+
+    // Give Alice a second method so removing her own passkey would be allowed.
+    await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "alice@selah.tools" }),
+    });
+    expect(
+      (
+        await h.fetch("/auth/email/verify", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` },
+          body: JSON.stringify({ email: "alice@selah.tools", code: h.emails[0]!.code }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const steal = await h.fetch("/auth/methods/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` },
+      body: JSON.stringify({ type: "passkey", id: b.credId }),
+    });
+    expect(steal.status).toBe(404);
+    expect(h.authDb.query("SELECT user_id FROM passkeys WHERE credential_id = ?").get(b.credId) as { user_id: string }).toEqual({
+      user_id: b.user.id,
+    });
+
+    const own = await h.fetch("/auth/methods/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` },
+      body: JSON.stringify({ type: "passkey", id: a.credId }),
+    });
+    expect(own.status).toBe(200);
+    const after = (await own.json()) as { passkeys: unknown[]; email: string };
+    expect(after.passkeys).toEqual([]);
+    expect(after.email).toBe("alice@selah.tools");
+    expect(h.authDb.query("SELECT COUNT(*) AS n FROM passkeys WHERE credential_id = ?").get(a.credId) as { n: number }).toEqual({
+      n: 0,
+    });
+  });
+});

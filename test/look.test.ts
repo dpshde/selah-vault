@@ -33,18 +33,37 @@ test("book suggestions under #ref are name-only, clipped to the field (no CHAPTE
   expect(css).toMatch(/si-passage-input::part\(cell\)\s*\{[^}]*overflow:\s*visible/);
 });
 
-test("one way to sync: the Sync screen offers server sync, passkeys, and connected apps (no folder or sync key)", () => {
+test("one way to sync: the Sync screen offers server sync and connected apps (no folder or sync key)", () => {
   const sync = /<section id="sync"[\s\S]*?<\/section>/.exec(read("index.html"))?.[0] ?? "";
   expect(sync).toContain('id="use-server"');
   expect(sync).toContain('role="switch"');
   expect(sync).toContain("Across devices");
-  expect(sync).toContain('class="row sync-actions"');
-  expect(sync).toContain('<button type="button" id="add-passkey"');
   expect(sync).toContain('id="grants-list"');
   expect(sync).toContain("Connected apps");
+  expect(sync).not.toContain('id="add-passkey"');
   expect(sync).not.toContain('id="show-key"');
   expect(sync).not.toContain('class="lede"');
   expect(sync.toLowerCase()).not.toContain("folder");
   expect(app).not.toMatch(/folder\.js|showDirectoryPicker|folderTransport|fromBibleRs/);
   expect(read("index.html")).toContain('accept=".jsonl,application/x-ndjson"');
+});
+
+test("the Account page lists sign-in methods and holds Log out; menu opens it", () => {
+  const html = read("index.html");
+  const account = /<section id="account"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+  expect(account).toContain("<h1>Account</h1>");
+  expect(account).toContain("Sign-in methods");
+  expect(account).toContain('id="methods-list"');
+  expect(account).toContain('id="add-passkey"');
+  expect(account).toContain('id="add-email"');
+  expect(account).toContain('id="add-apple"');
+  expect(account).toContain('id="lock"');
+  expect(account).toContain("Log out");
+  expect(account).toContain("panel-close");
+  expect(account).toContain("Done");
+  const menu = /<details id="menu">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
+  expect(menu).toContain('id="open-account"');
+  expect(menu).not.toContain('id="lock"');
+  expect(app).toContain("function renderAccount");
+  expect(app).toContain("function loadMethods");
 });

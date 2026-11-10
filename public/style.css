@@ -205,9 +205,46 @@ details > div { position: absolute; right: 0; top: calc(100% - 1px); z-index: 20
 details > div button { background: transparent; border: 0; color: var(--fg); text-align: left; font-weight: 500; padding: .5rem .625rem; box-shadow: inset 3px 0 0 transparent; }
 details > div button.danger { color: var(--danger); }
 details > div button:hover { background: var(--hover); box-shadow: inset 3px 0 0 var(--brand); }
-/* The ••• menu: a few places to go, then Log out on its own. */
-#menu > div { min-width: 12rem; padding: 0; }
-#menu > div button { padding: .6875rem .875rem; }
+/* The ••• menu: Sync, Colors, Backup, Account; theme and Contract are phone-only. */
+#menu > div { min-width: 13.5rem; padding: 0; }
+#menu > div button,
+#menu > div .menu-link,
+#menu > div .menu-theme {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  padding: .6875rem .875rem;
+  box-sizing: border-box;
+  text-align: left;
+  text-decoration: none;
+  color: var(--fg);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 500;
+}
+#menu > div button:hover,
+#menu > div .menu-link:hover,
+#menu > div .menu-theme:hover {
+  background: var(--hover);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+#menu > div button > svg,
+#menu > div .menu-link > svg,
+#menu > div .menu-theme > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+#menu > div button > span,
+#menu > div .menu-link > span,
+#menu > div .menu-theme-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+}
 #menu > div hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
 
 /* The add form, built like route.bible's search row: the color in a square cell, the field, and the
@@ -1122,6 +1159,19 @@ button.wide { width: 100%; padding: .8125rem 1rem; }
 .grants-list .grant-meta strong { display: block; font-weight: 600; }
 .grants-list .grant-meta small { display: block; color: var(--muted); font-size: .78rem; }
 .grants-panel #grants-empty { margin: 0; font-size: .875rem; }
+
+.account-identity { width: 100%; padding: .15rem 0 1rem; margin: 0 0 .25rem; border-bottom: 1px solid var(--line); }
+.account-identity strong { display: block; font-size: 1.125rem; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.account-identity small { display: block; color: var(--muted); font-size: .875rem; margin-top: .25rem; overflow-wrap: anywhere; }
+#account .grants-panel { border-bottom: 0; padding-bottom: 0; }
+#methods-empty { margin: 0 0 .75rem; font-size: .875rem; }
+#methods-add { margin: .75rem 0 0; }
+.link-email-form { display: grid; gap: .625rem; margin: .75rem 0 0; }
+.link-email-form[hidden] { display: none; }
+.link-email-form label { display: grid; gap: .375rem; font-size: .875rem; }
+.link-email-form input { width: 100%; box-sizing: border-box; }
+.account-logout { width: 100%; margin-top: 1.5rem; min-height: 2.625rem; text-align: center; }
+.methods-list .grant-meta small { text-transform: none; letter-spacing: 0; }
 #start.has-passkey #unlock-form button[type="submit"] { background: transparent; color: var(--fg); border-color: var(--line); }
 #start.has-passkey #unlock-form button[type="submit"]:hover { background: var(--hover); border-color: var(--hover-line); }
 #start label.light { font-size: .8125rem; }
@@ -1161,9 +1211,9 @@ a.shell-link:focus-visible, button.shell-link:focus-visible { color: var(--fg); 
 .shell-status[hidden] { display: none; }
 .menu-status { cursor: default; }
 .menu-status[hidden] { display: none; }
-/* Desktop popover stays Sync · Colors · Backup · Log out (phone-only rows hidden). */
+/* Desktop popover stays Sync · Colors · Backup · Account (phone-only rows hidden). */
 @media (min-width: 601px) {
-  #menu .menu-link, #menu .menu-theme, #menu .menu-status, #menu .menu-extra { display: none; }
+  #menu > div .menu-link, #menu > div .menu-theme, #menu > div .menu-extra { display: none; }
 }
 /* Settings panels: desktop keeps a simple stacked layout; phones get a phone-page chrome. */
 .settings-panel .panel-head { display: contents; }
@@ -1237,7 +1287,7 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
 
 /* —— Mobile library (≤600px): top-down list toolbar + header menu — */
 @media (max-width: 600px) {
-  /* One horizontal inset for the ••• sheet and Sync/Colors/Backup. */
+  /* One horizontal inset for the ••• sheet and Sync/Colors/Backup/Account. */
   :root { --dock-pad-x: .75rem; }
   body:has(#main:not([hidden])) main {
     padding-top: max(calc(env(safe-area-inset-top) + .75rem), 1.25rem);
@@ -1245,7 +1295,7 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     max-width: none;
   }
   /* Phone settings: top-aligned phone page (not the desktop optical vertical offset). */
-  body:has(#colors:not([hidden]), #backup:not([hidden]), #sync:not([hidden])) main {
+  body:has(#colors:not([hidden]), #backup:not([hidden]), #sync:not([hidden]), #account:not([hidden])) main {
     max-width: none;
     padding: 0;
     padding-top: env(safe-area-inset-top, 0px);
@@ -1254,7 +1304,7 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     overflow: hidden;
   }
   /* Phone footer chips are in the ••• sheet; hide shell-meta whenever a library screen is open. */
-  body:has(#main:not([hidden]), #colors:not([hidden]), #backup:not([hidden]), #sync:not([hidden])) > .shell-meta {
+  body:has(#main:not([hidden]), #colors:not([hidden]), #backup:not([hidden]), #sync:not([hidden]), #account:not([hidden])) > .shell-meta {
     display: none;
   }
   /* On phone, #list grows to fill the library column so #list-total hugs the bottom of the viewport. */
@@ -1307,11 +1357,10 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   }
   #menu > div button,
   #menu > div .menu-link,
-  #menu > div .menu-theme,
-  #menu > div .menu-status {
+  #menu > div .menu-theme {
     display: flex;
     align-items: center;
-    gap: .625rem;
+    gap: .75rem;
     width: 100%;
     min-height: 44px;
     padding: .75rem .875rem;
@@ -1331,11 +1380,6 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     background: var(--hover);
     box-shadow: inset 3px 0 0 var(--brand);
   }
-  #menu > div .menu-status {
-    color: var(--muted);
-    font-size: .875rem;
-    font-weight: 500;
-  }
   #menu > div .menu-theme-label { font-weight: 500; }
   #menu > div hr {
     display: block;
@@ -1346,7 +1390,7 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   #menu > div .menu-extra { display: block; }
   .rank-preview { margin-bottom: .5rem; }
 
-  /* —— Phone settings pages (Colors / Sync / Backup) —— */
+  /* —— Phone settings pages (Colors / Sync / Backup / Account) —— */
   .settings-panel:not([hidden]) {
     display: flex;
     flex-direction: column;
@@ -1463,7 +1507,9 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   }
   #backup .backup-actions > button,
   #sync .sync-actions > button,
-  #sync #erase {
+  #account .sync-actions > button,
+  #sync #erase,
+  #account .account-logout {
     min-height: 48px;
     box-sizing: border-box;
   }
@@ -1471,14 +1517,41 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
   #sync #erase {
     width: 100%;
   }
-  #sync .sync-actions {
+  #sync .sync-actions,
+  #account .sync-actions {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: .5rem;
     width: 100%;
     margin: 0 0 1rem;
     padding: 0;
   }
+  #account .sync-actions > button {
+    flex: 1 1 calc(50% - .5rem);
+    min-width: 0;
+  }
+  #account .methods-list li {
+    min-height: 48px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: .75rem .875rem;
+  }
+  #account .account-identity {
+    padding: .25rem 0 1.125rem;
+  }
+  #account .account-identity strong { font-size: 1.25rem; }
+  #account .account-logout {
+    width: 100%;
+    min-height: 48px;
+    margin-top: 1.25rem;
+    box-sizing: border-box;
+  }
+  #account .link-email-form label,
+  #account .link-email-form input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  #account .link-email-form input { min-height: 48px; font-size: 1rem; }
   #key-reveal .icon {
     min-width: 44px;
     height: 44px;
