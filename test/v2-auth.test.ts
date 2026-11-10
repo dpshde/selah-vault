@@ -595,10 +595,12 @@ describe("OAuth 2.1 + PKCE (S256)", () => {
   });
 });
 
-async function registerPasskeySession(h: ReturnType<typeof createTestEnv>, name = "Key Vault") {
+async function registerPasskeySession(h: ReturnType<typeof createTestEnv>, name = "Key Vault", userAgent?: string) {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (userAgent) headers["user-agent"] = userAgent;
   const optRes = await h.fetch("/auth/passkey/register/options", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ name }),
   });
   const opts = (await optRes.json()) as { challenge: string };
@@ -629,7 +631,7 @@ async function registerPasskeySession(h: ReturnType<typeof createTestEnv>, name 
   );
   const regRes = await h.fetch("/auth/passkey/register/verify", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       credential: {
         id: credId,
@@ -885,5 +887,101 @@ describe("Linking sign-in methods to one account", () => {
     expect(h.authDb.query("SELECT COUNT(*) AS n FROM passkeys WHERE credential_id = ?").get(a.credId) as { n: number }).toEqual({
       n: 0,
     });
+  });
+});
+
+describe("Passkey names", () => {
+  const macSafari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+  const iPhone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
+  test("a new passkey gets a default name from the User-Agent", async () => {
+    const h = createTestEnv();
+    const mac = await registerPasskeySession(h, "Mac User", macSafari);
+    expect(mac.status).toBe(200);
+    const listed = (await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${mac.token}` } })).json()) as {
+      passkeys: Array<{ id: string; name: string | null }>;
+    };
+    expect(listed.passkeys).toHaveLength(1);
+    expect(listed.passkeys[0]!.id).toBe(mac.credId);
+    expect(listed.passkeys[0]!.name).toBe("Mac · Safari");
+
+    const phone = await registerPasskeySession(h, "Phone User", iPhone);
+    expect(phone.status).toBe(200);
+    const phoneListed = (await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${phone.token}` } })).json()) as {
+      passkeys: Array<{ name: string | null }>;
+    };
+    expect(phoneListed.passkeys[0]!.name).toBe("iPhone");
+
+    const plain = await registerPasskeySession(h, "No UA");
+    const plainListed = (await (await h.fetch("/auth/methods", { headers: { authorization: `Bearer ${plain.token}` } })).json()) as {
+      passkeys: Array<{ name: string | null }>;
+    };
+    expect(plainListed.passkeys[0]!.name).toBe("Passkey");
+  });
+
+  test("the owner can rename their passkey; another user's passkey is 404", async () => {
+    const h = createTestEnv();
+    const a = await registerPasskeySession(h, "Alice", macSafari);
+    const b = await registerPasskeySession(h, "Bob", iPhone);
+
+    const ok = await h.fetch("/auth/methods/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` },
+      body: JSON.stringify({ credentialId: a.credId, name: "  Living room iPad  " }),
+    });
+    expect(ok.status).toBe(200);
+    const body = (await ok.json()) as { passkeys: Array<{ id: string; name: string | null }> };
+    expect(body.passkeys).toEqual([expect.objectContaining({ id: a.credId, name: "Living room iPad" })]);
+
+    const steal = await h.fetch("/auth/methods/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` },
+      body: JSON.stringify({ credentialId: b.credId, name: "Stolen" }),
+    });
+    expect(steal.status).toBe(404);
+    expect(await steal.json()).toEqual({ error: "passkey not found" });
+    expect(
+      (h.authDb.query("SELECT name FROM passkeys WHERE credential_id = ?").get(b.credId) as { name: string }).name,
+    ).toBe("iPhone");
+    expect(
+      (h.authDb.query("SELECT name FROM passkeys WHERE credential_id = ?").get(a.credId) as { name: string }).name,
+    ).toBe("Living room iPad");
+  });
+
+  test("rename rejects empty, too-long, and unauthenticated requests; 40 characters is allowed", async () => {
+    const h = createTestEnv();
+    const a = await registerPasskeySession(h, "Alice");
+    const headers = { "content-type": "application/json", authorization: `Bearer ${a.token}` };
+
+    expect((await h.fetch("/auth/methods/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credentialId: a.credId, name: "X" }) })).status).toBe(401);
+
+    for (const name of ["", "   ", "x".repeat(41)]) {
+      const res = await h.fetch("/auth/methods/rename", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ credentialId: a.credId, name }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "name must be 1–40 characters" });
+    }
+
+    const exact = "x".repeat(40);
+    const ok = await h.fetch("/auth/methods/rename", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ credentialId: a.credId, name: exact }),
+    });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { passkeys: Array<{ name: string }> }).passkeys[0]!.name).toBe(exact);
+
+    const csrf = await h.fetch("/auth/methods/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: a.cookie },
+      body: JSON.stringify({ credentialId: a.credId, name: "Nope" }),
+    });
+    expect(csrf.status).toBe(403);
+    expect(
+      (h.authDb.query("SELECT name FROM passkeys WHERE credential_id = ?").get(a.credId) as { name: string }).name,
+    ).toBe(exact);
   });
 });

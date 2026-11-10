@@ -155,3 +155,7 @@ export async function removeSignInMethod(body, { fetch: fetchFn } = {}) {
   return postJson("/auth/methods/remove", body, fetchFn);
 }
 
+export async function renamePasskey({ credentialId, name }, { fetch: fetchFn } = {}) {
+  return postJson("/auth/methods/rename", { credentialId, name }, fetchFn);
+}
+

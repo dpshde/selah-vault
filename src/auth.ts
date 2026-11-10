@@ -363,11 +363,12 @@ async function handlePasskeyRegisterVerify(request: Request, env: AuthEnv, nowMs
     .run();
 
   const transports = Array.isArray(resp.transports) ? JSON.stringify(resp.transports) : null;
+  const passkeyName = defaultPasskeyName(request.headers.get("user-agent"));
   await env.DB.prepare(
-    `INSERT OR REPLACE INTO passkeys (credential_id, user_id, public_key, counter, transports, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO passkeys (credential_id, user_id, public_key, counter, transports, created_at, name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(att.credentialId, userId, JSON.stringify(att.jwk), att.signCount, transports, nowMs)
+    .bind(att.credentialId, userId, JSON.stringify(att.jwk), att.signCount, transports, nowMs, passkeyName)
     .run();
 
   const userRow = await env.DB.prepare("SELECT id, email, name FROM users WHERE id = ?")
@@ -811,6 +812,40 @@ function credentialSuffix(id: string): string {
   return src.slice(-8);
 }
 
+export const PASSKEY_NAME_MAX = 40;
+
+function browserFromUserAgent(ua: string): string | null {
+  if (/Edg(?:e|A|iOS)?\//i.test(ua) || /Edg\//i.test(ua)) return "Edge";
+  if (/OPR\/|Opera\//i.test(ua)) return "Opera";
+  if (/Chrome\/|CriOS\//i.test(ua)) return "Chrome";
+  if (/Firefox\/|FxiOS\//i.test(ua)) return "Firefox";
+  if (/Safari\//i.test(ua)) return "Safari";
+  return null;
+}
+
+/** Sensible default passkey name from a User-Agent, e.g. "iPhone" or "Mac · Safari". */
+export function defaultPasskeyName(userAgent: string | null | undefined): string {
+  const ua = userAgent ?? "";
+  const browser = browserFromUserAgent(ua);
+  let name = "Passkey";
+  if (/iPhone/i.test(ua)) name = "iPhone";
+  else if (/iPad/i.test(ua)) name = "iPad";
+  else if (/Macintosh|Mac OS X/i.test(ua)) name = browser ? `Mac · ${browser}` : "Mac";
+  else if (/Windows/i.test(ua)) name = browser ? `Windows · ${browser}` : "Windows";
+  else if (/Android/i.test(ua)) name = browser ? `Android · ${browser}` : "Android";
+  else if (/CrOS/i.test(ua)) name = browser ? `Chrome OS · ${browser}` : "Chrome OS";
+  else if (/Linux/i.test(ua)) name = browser ? `Linux · ${browser}` : "Linux";
+  else if (browser) name = browser;
+  return name.slice(0, PASSKEY_NAME_MAX);
+}
+
+export function parsePasskeyDisplayName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const name = raw.trim();
+  if (name.length < 1 || name.length > PASSKEY_NAME_MAX) return null;
+  return name;
+}
+
 async function countSignInMethods(db: D1Database, userId: string): Promise<number> {
   const user = await db
     .prepare("SELECT email, apple_sub FROM users WHERE id = ?")
@@ -841,10 +876,10 @@ async function methodsPayload(env: AuthEnv, userId: string) {
     .bind(userId)
     .first<{ email: string | null; apple_sub: string | null }>();
   const passkeys = await env.DB.prepare(
-    "SELECT credential_id, transports, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at ASC",
+    "SELECT credential_id, transports, created_at, name FROM passkeys WHERE user_id = ? ORDER BY created_at ASC",
   )
     .bind(userId)
-    .all<{ credential_id: string; transports: string | null; created_at: number }>();
+    .all<{ credential_id: string; transports: string | null; created_at: number; name: string | null }>();
   return {
     email: user?.email ?? null,
     apple: Boolean(user?.apple_sub),
@@ -853,6 +888,7 @@ async function methodsPayload(env: AuthEnv, userId: string) {
     passkeys: passkeys.results.map((row) => ({
       id: row.credential_id,
       suffix: credentialSuffix(row.credential_id),
+      name: row.name ?? null,
       created_at: row.created_at,
       transports: parseTransports(row.transports),
     })),
@@ -904,6 +940,31 @@ async function handleMethodsRemove(request: Request, env: AuthEnv): Promise<Resp
   } else {
     return json({ error: "unknown method type" }, 400);
   }
+  return json(await methodsPayload(env, userId));
+}
+
+async function handleMethodsRename(request: Request, env: AuthEnv): Promise<Response> {
+  const auth = await requireOwnerSession(env, request);
+  if ("error" in auth) return auth.error;
+  let body: Record<string, unknown>;
+  try {
+    const text = await request.text();
+    body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    return json({ error: "invalid JSON" }, 400);
+  }
+  const credentialId = typeof body.credentialId === "string" ? body.credentialId : typeof body.id === "string" ? body.id : "";
+  if (!credentialId) return json({ error: "missing passkey id" }, 400);
+  const name = parsePasskeyDisplayName(body.name);
+  if (!name) return json({ error: "name must be 1–40 characters" }, 400);
+  const userId = auth.verified.parsed.userId;
+  const row = await env.DB.prepare("SELECT credential_id FROM passkeys WHERE credential_id = ? AND user_id = ?")
+    .bind(credentialId, userId)
+    .first<{ credential_id: string }>();
+  if (!row) return json({ error: "passkey not found" }, 404);
+  await env.DB.prepare("UPDATE passkeys SET name = ? WHERE credential_id = ? AND user_id = ?")
+    .bind(name, credentialId, userId)
+    .run();
   return json(await methodsPayload(env, userId));
 }
 
@@ -1150,6 +1211,7 @@ export async function handleAuthAndOAuth(request: Request, env: AuthEnv): Promis
   if (path === "/auth/methods" && method === "GET") return handleMethodsGet(request, env);
   if (path === "/auth/methods" && method === "DELETE") return handleMethodsRemove(request, env);
   if (path === "/auth/methods/remove" && method === "POST") return handleMethodsRemove(request, env);
+  if (path === "/auth/methods/rename" && method === "POST") return handleMethodsRename(request, env);
 
   return null;
 }

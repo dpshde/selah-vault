@@ -14,6 +14,7 @@ import {
   passkeysAvailable,
   registerPasskey,
   removeSignInMethod,
+  renamePasskey,
   sendEmailCode,
   signInWithApple,
   signOutSession,
@@ -1507,10 +1508,7 @@ const authConfig = { appleClientId: null, emailConfigured: false };
 
 function applyAuthConfig() {
   const appleOn = Boolean(authConfig.appleClientId);
-  const emailOn = Boolean(authConfig.emailConfigured);
   if ($("#apple-login")) $("#apple-login").hidden = !appleOn;
-  if ($("#add-apple")) $("#add-apple").hidden = !appleOn;
-  if ($("#add-email")) $("#add-email").hidden = !emailOn;
 }
 
 async function loadConfig(retry = true) {
@@ -1922,6 +1920,11 @@ function hideLinkEmailForms() {
   if (verify) verify.hidden = true;
 }
 
+function emailFormsOpen() {
+  return Boolean($("#link-email-send-form") && !$("#link-email-send-form").hidden)
+    || Boolean($("#link-email-verify-form") && !$("#link-email-verify-form").hidden);
+}
+
 function renderAccount() {
   const name = library?.name || signedInUser?.name || "Personal";
   if ($("#account-display-name")) $("#account-display-name").textContent = name;
@@ -1931,109 +1934,262 @@ function renderAccount() {
   loadMethods();
 }
 
-function methodRow({ title, detail, type, id, canRemove }) {
+function setSlotStatus(el, text, on) {
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("is-on", Boolean(on));
+}
+
+async function removeMethod(payload, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await removeSignInMethod(payload);
+    if ($("#account-note")) $("#account-note").textContent = "";
+    await loadMethods();
+  } catch (error) {
+    if (btn) btn.disabled = false;
+    if ($("#account-note")) $("#account-note").textContent = error.message;
+  }
+}
+
+function passkeyTitle(pk) {
+  const name = typeof pk.name === "string" ? pk.name.trim() : "";
+  if (name) return name;
+  const suffix = pk.suffix || String(pk.id || "").slice(-8);
+  return suffix ? `Passkey · ${suffix}` : "Passkey";
+}
+
+function passkeyRow(pk, canRemove) {
   const li = document.createElement("li");
+  const view = document.createElement("div");
+  view.className = "passkey-row-view";
   const meta = document.createElement("div");
   meta.className = "grant-meta";
   const strong = document.createElement("strong");
-  strong.textContent = title;
+  strong.textContent = passkeyTitle(pk);
   const small = document.createElement("small");
-  small.textContent = detail;
+  const added = formatMethodDate(pk.created_at);
+  small.textContent = added ? `Added ${added}` : "Passkey";
   meta.append(strong, small);
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "quiet danger";
-  btn.textContent = "Remove";
-  btn.disabled = !canRemove;
-  if (!canRemove) btn.title = "You need at least one sign-in method.";
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
+  const actions = document.createElement("div");
+  actions.className = "method-slot-actions";
+  const renameBtn = document.createElement("button");
+  renameBtn.type = "button";
+  renameBtn.className = "quiet passkey-rename";
+  renameBtn.innerHTML = `${ICONS.edit}<span>Rename</span>`;
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "quiet danger";
+  removeBtn.textContent = "Remove";
+  removeBtn.disabled = !canRemove;
+  if (!canRemove) {
+    removeBtn.title = "You need at least one sign-in method.";
+    removeBtn.setAttribute("aria-describedby", "slot-passkey-hint");
+  }
+  removeBtn.addEventListener("click", () => removeMethod({ type: "passkey", id: pk.id }, removeBtn));
+  actions.append(renameBtn, removeBtn);
+  view.append(meta, actions);
+
+  const form = document.createElement("form");
+  form.className = "passkey-rename-form";
+  form.hidden = true;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 40;
+  input.required = true;
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", "Passkey name");
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "quiet";
+  cancel.textContent = "Cancel";
+  form.append(input, save, cancel);
+
+  renameBtn.addEventListener("click", () => {
+    if ($("#account-note")) $("#account-note").textContent = "";
+    const current = typeof pk.name === "string" ? pk.name.trim() : "";
+    input.value = current || passkeyTitle(pk);
+    view.hidden = true;
+    form.hidden = false;
+    input.focus();
+    input.select();
+  });
+  cancel.addEventListener("click", () => {
+    form.hidden = true;
+    view.hidden = false;
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (name.length < 1 || name.length > 40) {
+      if ($("#account-note")) $("#account-note").textContent = "Name must be 1–40 characters.";
+      return;
+    }
+    save.disabled = true;
     try {
-      await removeSignInMethod(id ? { type, id } : { type });
+      await renamePasskey({ credentialId: pk.id, name });
       if ($("#account-note")) $("#account-note").textContent = "";
       await loadMethods();
     } catch (error) {
-      btn.disabled = false;
+      save.disabled = false;
       if ($("#account-note")) $("#account-note").textContent = error.message;
     }
   });
-  li.append(meta, btn);
+
+  li.append(view, form);
   return li;
 }
 
+function renderSlots({ signedIn, email, apple, appleConfigured, emailConfigured, passkeys }) {
+  const signedOut = $("#methods-signed-out");
+  if (signedOut) signedOut.hidden = signedIn;
+  const keys = Array.isArray(passkeys) ? passkeys : [];
+  const count = (email ? 1 : 0) + (apple ? 1 : 0) + keys.length;
+  const canRemove = count > 1;
+  const formsOpen = emailFormsOpen();
+
+  const pkSlot = $("#slot-passkey");
+  const pkOn = keys.length > 0;
+  pkSlot?.classList.toggle("is-enabled", pkOn);
+  pkSlot?.classList.remove("is-unavailable");
+  setSlotStatus($("#slot-passkey-status"), pkOn ? "Enabled" : "Not set up", pkOn);
+  const addPk = $("#add-passkey");
+  if (addPk) addPk.hidden = !signedIn || !passkeysAvailable();
+  const pkList = $("#slot-passkey-list");
+  if (pkList) {
+    pkList.replaceChildren(...keys.map((pk) => passkeyRow(pk, canRemove)));
+    pkList.hidden = keys.length === 0;
+  }
+  const pkHint = $("#slot-passkey-hint");
+  if (pkHint) pkHint.hidden = !(pkOn && !canRemove);
+
+  const emailSlot = $("#slot-email");
+  const emailOn = Boolean(email);
+  const emailReady = Boolean(emailConfigured);
+  emailSlot?.classList.toggle("is-enabled", emailOn);
+  emailSlot?.classList.toggle("is-unavailable", signedIn && !emailReady && !emailOn);
+  const emailStatus = !signedIn || emailReady || emailOn
+    ? (emailOn ? "Enabled" : "Not set up")
+    : "Not available yet";
+  setSlotStatus($("#slot-email-status"), emailStatus, emailOn);
+  const emailDetail = $("#slot-email-detail");
+  if (emailDetail) {
+    emailDetail.textContent = emailOn ? email : "";
+    emailDetail.hidden = !emailOn;
+  }
+  const addEmail = $("#add-email");
+  const changeEmail = $("#change-email");
+  const removeEmail = $("#remove-email");
+  if (addEmail) addEmail.hidden = !signedIn || !emailReady || emailOn || formsOpen;
+  if (changeEmail) changeEmail.hidden = !signedIn || !emailOn || formsOpen;
+  if (removeEmail) {
+    removeEmail.hidden = !signedIn || !emailOn;
+    removeEmail.disabled = !canRemove;
+    if (!canRemove) {
+      removeEmail.title = "You need at least one sign-in method.";
+      removeEmail.setAttribute("aria-describedby", "slot-email-hint");
+    } else {
+      removeEmail.removeAttribute("title");
+      removeEmail.removeAttribute("aria-describedby");
+    }
+  }
+  const emailHint = $("#slot-email-hint");
+  if (emailHint) emailHint.hidden = !(emailOn && !canRemove);
+
+  const appleSlot = $("#slot-apple");
+  const appleOn = Boolean(apple);
+  const appleReady = Boolean(appleConfigured);
+  appleSlot?.classList.toggle("is-enabled", appleOn);
+  appleSlot?.classList.toggle("is-unavailable", signedIn && !appleReady && !appleOn);
+  const appleStatus = appleOn ? "Enabled" : (appleReady || !signedIn ? "Not set up" : "Not available yet");
+  setSlotStatus($("#slot-apple-status"), appleStatus, appleOn);
+  const appleDetail = $("#slot-apple-detail");
+  if (appleDetail) {
+    appleDetail.textContent = "Linked";
+    appleDetail.hidden = !appleOn;
+  }
+  const addApple = $("#add-apple");
+  const removeApple = $("#remove-apple");
+  if (addApple) addApple.hidden = !signedIn || !appleReady || appleOn;
+  if (removeApple) {
+    removeApple.hidden = !signedIn || !appleOn;
+    removeApple.disabled = !canRemove;
+    if (!canRemove) {
+      removeApple.title = "You need at least one sign-in method.";
+      removeApple.setAttribute("aria-describedby", "slot-apple-hint");
+    } else {
+      removeApple.removeAttribute("title");
+      removeApple.removeAttribute("aria-describedby");
+    }
+  }
+  const appleHint = $("#slot-apple-hint");
+  if (appleHint) appleHint.hidden = !(appleOn && !canRemove);
+}
+
 async function loadMethods() {
-  const list = $("#methods-list");
-  const empty = $("#methods-empty");
-  const add = $("#methods-add");
-  if (!list || !empty) return;
+  const slots = $("#methods-slots");
+  if (!slots) return;
   if (!signedInUser) {
-    list.replaceChildren();
-    empty.hidden = false;
-    empty.textContent = "Sign in to manage sign-in methods.";
-    if (add) add.hidden = true;
     hideLinkEmailForms();
     if ($("#account-display-email")) $("#account-display-email").textContent = "Not signed in";
+    renderSlots({
+      signedIn: false,
+      email: null,
+      apple: false,
+      appleConfigured: Boolean(authConfig.appleClientId),
+      emailConfigured: Boolean(authConfig.emailConfigured),
+      passkeys: [],
+    });
     return;
   }
-  if (add) add.hidden = false;
   try {
     const data = await fetchSignInMethods();
     authConfig.emailConfigured = Boolean(data.emailConfigured);
     applyAuthConfig();
-    if ($("#add-apple")) $("#add-apple").hidden = !data.appleConfigured;
-    if ($("#add-email")) {
-      $("#add-email").hidden = !data.emailConfigured;
-      $("#add-email").textContent = data.email ? "Change email" : "Add email";
-    }
     if ($("#account-display-email")) {
       $("#account-display-email").textContent = data.email || "No email linked";
     }
-    const passkeys = Array.isArray(data.passkeys) ? data.passkeys : [];
-    const count = (data.email ? 1 : 0) + (data.apple ? 1 : 0) + passkeys.length;
-    const canRemove = count > 1;
-    const rows = [];
-    if (data.email) {
-      rows.push(methodRow({ title: data.email, detail: "Email", type: "email", canRemove }));
-    }
-    for (const pk of passkeys) {
-      const suffix = pk.suffix || String(pk.id || "").slice(-8);
-      const added = formatMethodDate(pk.created_at);
-      rows.push(methodRow({
-        title: suffix ? `Passkey · ${suffix}` : "Passkey",
-        detail: added ? `Added ${added}` : "Passkey",
-        type: "passkey",
-        id: pk.id,
-        canRemove,
-      }));
-    }
-    if (data.apple) {
-      rows.push(methodRow({ title: "Apple", detail: "Sign in with Apple", type: "apple", canRemove }));
-    }
-    list.replaceChildren(...rows);
-    empty.hidden = rows.length > 0;
-    empty.textContent = rows.length ? "" : "No sign-in methods yet.";
+    renderSlots({
+      signedIn: true,
+      email: data.email || null,
+      apple: Boolean(data.apple),
+      appleConfigured: Boolean(data.appleConfigured),
+      emailConfigured: Boolean(data.emailConfigured),
+      passkeys: Array.isArray(data.passkeys) ? data.passkeys : [],
+    });
   } catch (error) {
-    list.replaceChildren();
-    empty.hidden = false;
-    empty.textContent = "Couldn't load sign-in methods.";
     if ($("#account-note")) $("#account-note").textContent = error.message;
   }
 }
 
 let pendingLinkEmail = "";
 
-$("#add-email")?.addEventListener("click", () => {
+function openLinkEmailForm() {
   if ($("#account-note")) $("#account-note").textContent = "";
   const send = $("#link-email-send-form");
   const verify = $("#link-email-verify-form");
   if (verify) verify.hidden = true;
   if (send) {
     send.hidden = false;
+    $("#add-email") && ($("#add-email").hidden = true);
+    $("#change-email") && ($("#change-email").hidden = true);
     $("#link-email-input")?.focus();
   }
-});
+}
 
-$("#link-email-cancel")?.addEventListener("click", () => hideLinkEmailForms());
+$("#add-email")?.addEventListener("click", openLinkEmailForm);
+$("#change-email")?.addEventListener("click", openLinkEmailForm);
+$("#remove-email")?.addEventListener("click", () => removeMethod({ type: "email" }, $("#remove-email")));
+$("#remove-apple")?.addEventListener("click", () => removeMethod({ type: "apple" }, $("#remove-apple")));
+
+$("#link-email-cancel")?.addEventListener("click", () => {
+  hideLinkEmailForms();
+  loadMethods();
+});
 
 $("#link-email-send-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();

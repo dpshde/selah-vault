@@ -53,7 +53,10 @@ test("the Account page lists sign-in methods and holds Log out; menu opens it", 
   const account = /<section id="account"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
   expect(account).toContain("<h1>Account</h1>");
   expect(account).toContain("Sign-in methods");
-  expect(account).toContain('id="methods-list"');
+  expect(account).toContain('id="methods-slots"');
+  expect(account).toContain('id="slot-passkey"');
+  expect(account).toContain('id="slot-email"');
+  expect(account).toContain('id="slot-apple"');
   expect(account).toContain('id="add-passkey"');
   expect(account).toContain('id="add-email"');
   expect(account).toContain('id="add-apple"');
@@ -61,9 +64,15 @@ test("the Account page lists sign-in methods and holds Log out; menu opens it", 
   expect(account).toContain("Log out");
   expect(account).toContain("panel-close");
   expect(account).toContain("Done");
+  expect(account).not.toContain('id="methods-list"');
   const menu = /<details id="menu">([\s\S]*?)<\/details>/.exec(html)?.[1] ?? "";
   expect(menu).toContain('id="open-account"');
   expect(menu).not.toContain('id="lock"');
   expect(app).toContain("function renderAccount");
   expect(app).toContain("function loadMethods");
+  expect(app).toContain("function renderSlots");
+  expect(app).toContain("renamePasskey");
+  expect(app).toContain("Rename");
+  expect(css).toMatch(/\.method-slot \{/);
+  expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?#account \.method-slot-actions > button[\s\S]*?min-height: 48px/);
 });
