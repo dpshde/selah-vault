@@ -34,13 +34,56 @@ export interface AuthEnv {
   DB: D1Database;
   LIBRARY: DurableObjectNamespace;
   ASSETS?: Fetcher;
-  SNAPSHOTS?: R2Bucket;
   YVP_PUBLIC_APP_KEY?: string;
   APPLE_CLIENT_ID?: string;
   RESEND_API_KEY?: string;
   sendEmail?: (msg: EmailMessage) => Promise<void>;
   fetchJwks?: typeof fetch;
   now?: () => number;
+}
+
+/** Email OTP send: max codes per email address per sliding window. */
+export const EMAIL_SEND_PER_EMAIL_MAX = 5;
+/** Email OTP send: max codes per client IP per sliding window. */
+export const EMAIL_SEND_PER_IP_MAX = 20;
+/** Sliding window for OTP send rate limits. */
+export const EMAIL_SEND_WINDOW_MS = 60 * 60_000;
+/** Max failed+total verify attempts on a single OTP challenge (preserved across resends). */
+export const EMAIL_VERIFY_MAX_ATTEMPTS = 5;
+/** Cap total verify posts per email per sliding window (across codes/resends). */
+export const EMAIL_VERIFY_PER_EMAIL_MAX = 15;
+/** Sliding window for OTP verify rate limits. */
+export const EMAIL_VERIFY_WINDOW_MS = 60 * 60_000;
+
+export async function bumpRateLimit(
+  db: D1Database,
+  bucket: string,
+  max: number,
+  windowMs: number,
+  nowMs: number,
+): Promise<{ ok: boolean; count: number }> {
+  const row = await db
+    .prepare("SELECT count, window_start FROM rate_limits WHERE bucket = ?")
+    .bind(bucket)
+    .first<{ count: number; window_start: number }>();
+  if (!row || nowMs - row.window_start >= windowMs) {
+    await db
+      .prepare("INSERT OR REPLACE INTO rate_limits (bucket, count, window_start) VALUES (?, 1, ?)")
+      .bind(bucket, nowMs)
+      .run();
+    return { ok: true, count: 1 };
+  }
+  if (row.count >= max) return { ok: false, count: row.count };
+  await db.prepare("UPDATE rate_limits SET count = count + 1 WHERE bucket = ?").bind(bucket).run();
+  return { ok: true, count: row.count + 1 };
+}
+
+export function clientIp(request: Request): string {
+  const cf = request.headers.get("cf-connecting-ip")?.trim();
+  if (cf) return cf.slice(0, 128);
+  const xff = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (xff) return xff.slice(0, 128);
+  return "unknown";
 }
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -437,25 +480,34 @@ async function handlePasskeyLoginVerify(request: Request, env: AuthEnv, nowMs: n
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** True when Email OTP can actually deliver a code (test hook or Resend secret). */
+export function emailDeliveryConfigured(env: AuthEnv): boolean {
+  return typeof env.sendEmail === "function" || Boolean(env.RESEND_API_KEY);
+}
+
 async function dispatchEmail(env: AuthEnv, msg: EmailMessage): Promise<void> {
   if (env.sendEmail) {
     await env.sendEmail(msg);
     return;
   }
-  if (env.RESEND_API_KEY) {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "Selah Vault <auth@selah.tools>",
-        to: [msg.to],
-        subject: msg.subject,
-        text: msg.text,
-      }),
-    });
+  if (!env.RESEND_API_KEY) {
+    throw new Error("email delivery is not configured");
+  }
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "Selah Vault <auth@selah.tools>",
+      to: [msg.to],
+      subject: msg.subject,
+      text: msg.text,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`email provider returned ${res.status}`);
   }
 }
 
@@ -469,25 +521,73 @@ async function handleEmailSend(request: Request, env: AuthEnv, nowMs: number): P
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   if (!EMAIL_RE.test(email) || email.length > 254) return json({ error: "invalid email" }, 400);
 
+  // Staging/workers.dev without RESEND_API_KEY must fail cleanly — never pretend to send.
+  if (!emailDeliveryConfigured(env)) {
+    return json({ error: "Email sign-in is not configured" }, 503);
+  }
+
+  const ip = clientIp(request);
+  const emailLimit = await bumpRateLimit(
+    env.DB,
+    `email_send:${email}`,
+    EMAIL_SEND_PER_EMAIL_MAX,
+    EMAIL_SEND_WINDOW_MS,
+    nowMs,
+  );
+  if (!emailLimit.ok) return json({ error: "too many codes for this email" }, 429);
+  const ipLimit = await bumpRateLimit(
+    env.DB,
+    `email_send_ip:${ip}`,
+    EMAIL_SEND_PER_IP_MAX,
+    EMAIL_SEND_WINDOW_MS,
+    nowMs,
+  );
+  if (!ipLimit.ok) return json({ error: "too many codes from this network" }, 429);
+
   const rand = crypto.getRandomValues(new Uint32Array(1))[0] % 900_000;
   const code = String(100_000 + rand);
   const secretHash = await sha256Hex(`${email}:${code}`);
-  const id = `otp_${b64uEncode(crypto.getRandomValues(new Uint8Array(12)))}`;
+  const expiresAt = nowMs + 10 * 60_000;
 
-  await env.DB.prepare("DELETE FROM auth_challenges WHERE kind = 'email_otp' AND target = ?").bind(email).run();
-  await env.DB.prepare(
-    `INSERT INTO auth_challenges (id, kind, target, secret_hash, user_id, attempts, expires_at, created_at)
-     VALUES (?, 'email_otp', ?, ?, NULL, 0, ?, ?)`,
+  // Resend updates the code in place and MUST preserve attempts so brute-force
+  // progress is not reset by requesting a fresh email.
+  const existing = await env.DB.prepare(
+    "SELECT id, attempts, expires_at FROM auth_challenges WHERE kind = 'email_otp' AND target = ? ORDER BY created_at DESC LIMIT 1",
   )
-    .bind(id, email, secretHash, nowMs + 10 * 60_000, nowMs)
-    .run();
+    .bind(email)
+    .first<{ id: string; attempts: number; expires_at: number }>();
 
-  await dispatchEmail(env, {
-    to: email,
-    subject: `${code} is your Selah Vault sign-in code`,
-    text: `Your Selah Vault verification code is ${code}. It expires in 10 minutes.`,
-    code,
-  });
+  if (existing && existing.attempts >= EMAIL_VERIFY_MAX_ATTEMPTS) {
+    return json({ error: "too many verification attempts; try again later" }, 429);
+  }
+
+  if (existing && existing.expires_at > nowMs) {
+    await env.DB.prepare("UPDATE auth_challenges SET secret_hash = ?, expires_at = ? WHERE id = ?")
+      .bind(secretHash, expiresAt, existing.id)
+      .run();
+  } else {
+    if (existing) {
+      await env.DB.prepare("DELETE FROM auth_challenges WHERE id = ?").bind(existing.id).run();
+    }
+    const id = `otp_${b64uEncode(crypto.getRandomValues(new Uint8Array(12)))}`;
+    await env.DB.prepare(
+      `INSERT INTO auth_challenges (id, kind, target, secret_hash, user_id, attempts, expires_at, created_at)
+       VALUES (?, 'email_otp', ?, ?, NULL, 0, ?, ?)`,
+    )
+      .bind(id, email, secretHash, expiresAt, nowMs)
+      .run();
+  }
+
+  try {
+    await dispatchEmail(env, {
+      to: email,
+      subject: `${code} is your Selah Vault sign-in code`,
+      text: `Your Selah Vault verification code is ${code}. It expires in 10 minutes.`,
+      code,
+    });
+  } catch {
+    return json({ error: "Email sign-in is not configured" }, 503);
+  }
   return json({ sent: true });
 }
 
@@ -502,13 +602,22 @@ async function handleEmailVerify(request: Request, env: AuthEnv, nowMs: number):
   const code = typeof body.code === "string" ? body.code.trim() : "";
   if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return json({ error: "invalid email or code" }, 400);
 
+  const verifyLimit = await bumpRateLimit(
+    env.DB,
+    `email_verify:${email}`,
+    EMAIL_VERIFY_PER_EMAIL_MAX,
+    EMAIL_VERIFY_WINDOW_MS,
+    nowMs,
+  );
+  if (!verifyLimit.ok) return json({ error: "too many verification attempts" }, 429);
+
   const row = await env.DB.prepare(
     "SELECT id, secret_hash, attempts, expires_at FROM auth_challenges WHERE kind = 'email_otp' AND target = ? ORDER BY created_at DESC LIMIT 1",
   )
     .bind(email)
     .first<{ id: string; secret_hash: string; attempts: number; expires_at: number }>();
 
-  if (!row || row.expires_at <= nowMs || row.attempts >= 5) {
+  if (!row || row.expires_at <= nowMs || row.attempts >= EMAIL_VERIFY_MAX_ATTEMPTS) {
     return json({ error: "code expired or invalid" }, 401);
   }
   const expectedHash = await sha256Hex(`${email}:${code}`);
@@ -555,7 +664,11 @@ async function handleAppleAuth(request: Request, env: AuthEnv, nowMs: number): P
   if (header.alg !== "RS256" || !header.kid || payload.iss !== "https://appleid.apple.com" || !payload.sub || !payload.exp || payload.exp <= nowSec) {
     return json({ error: "invalid Apple token claims" }, 401);
   }
-  if (env.APPLE_CLIENT_ID && payload.aud !== env.APPLE_CLIENT_ID) {
+  // Apple sign-in is disabled unless APPLE_CLIENT_ID is configured. Never skip the audience check.
+  if (!env.APPLE_CLIENT_ID) {
+    return json({ error: "Apple sign-in is not configured" }, 503);
+  }
+  if (payload.aud !== env.APPLE_CLIENT_ID) {
     return json({ error: "Apple token audience mismatch" }, 401);
   }
 

@@ -97,6 +97,102 @@ describe("Email OTP & Session Lifecycle", () => {
     expect(outRes.status).toBe(200);
     expect((await h.fetch("/auth/me", { headers: { cookie: cookiePair } })).status).toBe(401);
   });
+
+  test("rate-limits OTP sends per email and per IP, and resend preserves the attempt counter", async () => {
+    const h = createTestEnv();
+    const email = "rate@selah.tools";
+    const send = (ip: string) =>
+      h.fetch("/auth/email/send", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+        body: JSON.stringify({ email }),
+      });
+
+    expect((await send("203.0.113.10")).status).toBe(200);
+    const firstCode = h.emails[0]!.code;
+
+    // Burn four verify attempts against the first code.
+    for (let i = 0; i < 4; i++) {
+      expect(
+        (
+          await h.fetch("/auth/email/verify", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email, code: "000000" }),
+          })
+        ).status,
+      ).toBe(401);
+    }
+
+    // Resend must keep attempts=4 so one more failure locks the challenge.
+    expect((await send("203.0.113.10")).status).toBe(200);
+    expect(h.emails).toHaveLength(2);
+    expect(h.emails[1]!.code).not.toBe(firstCode);
+
+    expect(
+      (
+        await h.fetch("/auth/email/verify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, code: "000000" }),
+        })
+      ).status,
+    ).toBe(401);
+
+    // Fifth failure exhausted attempts; even the latest code is rejected.
+    const locked = await h.fetch("/auth/email/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, code: h.emails[1]!.code }),
+    });
+    expect(locked.status).toBe(401);
+
+    // Further resends while locked out are refused.
+    expect((await send("203.0.113.10")).status).toBe(429);
+
+    // Per-email send cap (5/hour) on a fresh email.
+    const capped = "capped@selah.tools";
+    for (let i = 0; i < 5; i++) {
+      expect(
+        (
+          await h.fetch("/auth/email/send", {
+            method: "POST",
+            headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.7" },
+            body: JSON.stringify({ email: capped }),
+          })
+        ).status,
+      ).toBe(200);
+    }
+    expect(
+      (
+        await h.fetch("/auth/email/send", {
+          method: "POST",
+          headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.7" },
+          body: JSON.stringify({ email: capped }),
+        })
+      ).status,
+    ).toBe(429);
+
+    // Per-IP send cap across distinct emails.
+    const ip = "198.51.100.99";
+    for (let i = 0; i < 20; i++) {
+      const res = await h.fetch("/auth/email/send", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+        body: JSON.stringify({ email: `ip${i}@selah.tools` }),
+      });
+      expect(res.status).toBe(200);
+    }
+    expect(
+      (
+        await h.fetch("/auth/email/send", {
+          method: "POST",
+          headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+          body: JSON.stringify({ email: "ip-overflow@selah.tools" }),
+        })
+      ).status,
+    ).toBe(429);
+  });
 });
 
 describe("WebAuthn Passkeys (ES256 P-256)", () => {
@@ -219,6 +315,87 @@ describe("WebAuthn Passkeys (ES256 P-256)", () => {
   });
 });
 
+describe("Staging without RESEND_API_KEY / APPLE_CLIENT_ID", () => {
+  test("email OTP returns clear 503, Apple returns 503, and passkey sign-up still works", async () => {
+    // Mimic workers.dev staging: no email provider, no Apple client id, no sendEmail hook.
+    const h = createTestEnv({
+      sendEmail: undefined,
+      RESEND_API_KEY: undefined,
+      APPLE_CLIENT_ID: undefined,
+    });
+
+    const emailRes = await h.fetch("/auth/email/send", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "staging@selah.tools" }),
+    });
+    expect(emailRes.status).toBe(503);
+    expect(await emailRes.json()).toEqual({ error: "Email sign-in is not configured" });
+    expect(h.emails).toHaveLength(0);
+
+    const appleRes = await h.fetch("/auth/apple", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id_token: `${b64uEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", kid: "k" })))}.${b64uEncode(new TextEncoder().encode(JSON.stringify({ iss: "https://appleid.apple.com", aud: "x", sub: "s", exp: Math.floor(h.now / 1000) + 60 })))}.sig`,
+      }),
+    });
+    expect(appleRes.status).toBe(503);
+    expect(await appleRes.json()).toEqual({ error: "Apple sign-in is not configured" });
+
+    // Passkey registration must not depend on either secret.
+    const optRes = await h.fetch("/auth/passkey/register/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Staging Passkey" }),
+    });
+    expect(optRes.status).toBe(200);
+    const opts = (await optRes.json()) as { challenge: string };
+
+    const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const jwk = await crypto.subtle.exportKey("jwk", kp.publicKey);
+    const credIdBytes = crypto.getRandomValues(new Uint8Array(20));
+    const credId = b64uEncode(credIdBytes);
+    const coseKey = new Map<unknown, unknown>([
+      [1, 2],
+      [3, -7],
+      [-1, 1],
+      [-2, b64uDecode(jwk.x!)],
+      [-3, b64uDecode(jwk.y!)],
+    ]);
+    const coseBytes = cborEncode(coseKey);
+    const rpHash = await sha256Bytes("vault.selah.tools");
+    const authData = new Uint8Array(55 + credIdBytes.length + coseBytes.length);
+    authData.set(rpHash, 0);
+    authData[32] = 0x45;
+    authData[36] = 1;
+    authData[53] = 0;
+    authData[54] = credIdBytes.length;
+    authData.set(credIdBytes, 55);
+    authData.set(coseBytes, 55 + credIdBytes.length);
+    const attObj = cborEncode(new Map<unknown, unknown>([["fmt", "none"], ["authData", authData]]));
+    const clientDataReg = b64uEncode(
+      new TextEncoder().encode(JSON.stringify({ type: "webauthn.create", challenge: opts.challenge, origin: TEST_ORIGIN })),
+    );
+    const regRes = await h.fetch("/auth/passkey/register/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        credential: {
+          id: credId,
+          type: "public-key",
+          response: { clientDataJSON: clientDataReg, attestationObject: b64uEncode(attObj), transports: ["internal"] },
+        },
+      }),
+    });
+    expect(regRes.status).toBe(200);
+    const session = (await regRes.json()) as { token: string; user: { name: string } };
+    expect(session.token).toMatch(TOKEN_RE);
+    expect(session.user.name).toBe("Staging Passkey");
+    expect((await h.fetch("/v2/bootstrap", { headers: { authorization: `Bearer ${session.token}` } })).status).toBe(200);
+  });
+});
+
 describe("Sign in with Apple (RS256 JWKS)", () => {
   test("verifies Apple RS256 id_token against JWKS and links verified email accounts", async () => {
     const rsa = await crypto.subtle.generateKey(
@@ -263,6 +440,36 @@ describe("Sign in with Apple (RS256 JWKS)", () => {
     const body = (await res.json()) as { token: string; user: { id: string } };
     expect(body.token).toMatch(TOKEN_RE);
     expect(body.user.id).toBe(existing.user.id);
+  });
+
+  test("rejects Apple sign-in when APPLE_CLIENT_ID is unset (never skips audience check)", async () => {
+    const rsa = await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const h = createTestEnv(); // no APPLE_CLIENT_ID
+    const header = b64uEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", kid: "apple-k1" })));
+    const payload = b64uEncode(
+      new TextEncoder().encode(
+        JSON.stringify({
+          iss: "https://appleid.apple.com",
+          aud: "tools.selah.vault",
+          sub: "apple-user-unset",
+          exp: Math.floor(h.now / 1000) + 600,
+        }),
+      ),
+    );
+    const sig = new Uint8Array(
+      await crypto.subtle.sign("RSASSA-PKCS1-v1_5", rsa.privateKey, new TextEncoder().encode(`${header}.${payload}`)),
+    );
+    const res = await h.fetch("/auth/apple", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id_token: `${header}.${payload}.${b64uEncode(sig)}` }),
+    });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "Apple sign-in is not configured" });
   });
 });
 

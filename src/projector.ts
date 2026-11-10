@@ -25,6 +25,8 @@ export interface SqlAdapter {
 }
 
 export const EVENT_ID_RE = /^ev_[A-Za-z0-9_-]{16,32}$/;
+/** Reject client event timestamps more than this far ahead of server receive time. */
+export const MAX_EVENT_FUTURE_SKEW_MS = 5 * 60_000;
 const COLOR_ID_RE = /^(?:yellow|green|blue|pink|purple|orange|c-[A-Za-z0-9_-]{1,40})$/;
 const BUILTIN_NAMES: Record<string, string> = {
   yellow: "Yellow",
@@ -42,7 +44,10 @@ export function cmpTsId(aTs: number, aId: string, bTs: number, bId: string): num
   return aId > bId ? 1 : -1;
 }
 
-export function validateEventInput(raw: unknown): { event?: VaultEventInput; error?: string } {
+export function validateEventInput(
+  raw: unknown,
+  opts: { nowMs?: number } = {},
+): { event?: VaultEventInput; error?: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "event must be an object" };
   const obj = raw as Record<string, unknown>;
   const { id, ts, app, kind, ref, tags, data } = obj;
@@ -52,6 +57,10 @@ export function validateEventInput(raw: unknown): { event?: VaultEventInput; err
   }
   if (typeof ts !== "number" || !Number.isSafeInteger(ts) || ts < 0) {
     return { error: "event.ts must be a non-negative integer" };
+  }
+  const nowMs = opts.nowMs ?? Date.now();
+  if (ts > nowMs + MAX_EVENT_FUTURE_SKEW_MS) {
+    return { error: "event.ts is too far in the future" };
   }
   if (typeof app !== "string" || app.length < 1 || app.length > 64) {
     return { error: "event.app must be a 1..64 char string" };

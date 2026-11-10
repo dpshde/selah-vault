@@ -62,7 +62,8 @@ export function createTestEnv(overrides: Partial<Env> = {}) {
   const authDb = new Database(":memory:");
   for (const m of AUTH_MIGRATIONS) authDb.exec(m);
 
-  let currentNow = 1_790_000_000_000;
+  // Far enough ahead of fixture event timestamps so only intentionally future `ts` values trip skew checks.
+  let currentNow = 2_000_000_000_000;
   let d1Queries = 0;
   const emails: EmailMessage[] = [];
   const objects = new Map<

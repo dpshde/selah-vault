@@ -387,3 +387,106 @@ describe("FTS5 Search, WebSockets, Grants, Export/Import & Library Wipe", () => 
     expect(dbRow).toBeNull();
   });
 });
+
+describe("Cookie CSRF Origin & Event Timestamp Skew", () => {
+  test("cookie-authenticated /v2 writes require matching Origin; bearer and GET skip the check", async () => {
+    const h = createTestEnv();
+    const owner = await h.createUserSession("csrf@selah.tools", "CSRF");
+    const event = {
+      id: evId("csrf_hl_1"),
+      ts: 1000,
+      app: "selah-vault",
+      kind: "highlight.set",
+      ref: "JHN.1.1",
+      data: { color: "yellow" },
+    };
+
+    // Missing Origin with session cookie → 403
+    const missing = await h.fetch("/v2/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: owner.cookie },
+      body: JSON.stringify({ events: [event] }),
+    });
+    expect(missing.status).toBe(403);
+    expect(await missing.json()).toEqual({ error: "csrf origin mismatch" });
+
+    // Cross-site Origin with session cookie → 403 (covers import too)
+    const cross = await h.fetch("/v2/import", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-ndjson",
+        cookie: owner.cookie,
+        origin: "https://evil.example",
+      },
+      body: `${JSON.stringify({ "selah-vault": 2, library: owner.user.id, name: "X" })}\n`,
+    });
+    expect(cross.status).toBe(403);
+
+    // Matching Origin allows cookie write
+    const ok = await h.fetch("/v2/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: owner.cookie,
+        origin: "https://vault.selah.tools",
+      },
+      body: JSON.stringify({ events: [event] }),
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ seq: 1, accepted: 1, duplicates: 0 });
+
+    // Bearer token skips Origin requirement
+    const bearer = await h.fetch("/v2/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({
+        events: [{ ...event, id: evId("csrf_hl_2"), ref: "JHN.1.2" }],
+      }),
+    });
+    expect(bearer.status).toBe(200);
+
+    // Cookie GET bootstrap does not require Origin
+    expect((await h.fetch("/v2/bootstrap", { headers: { cookie: owner.cookie } })).status).toBe(200);
+  });
+
+  test("rejects event.ts more than a few minutes ahead of server receive time", async () => {
+    const h = createTestEnv();
+    const owner = await h.createUserSession("skew@selah.tools", "Skew");
+    const farFuture = await h.fetch("/v2/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({
+        events: [
+          {
+            id: evId("future_ts_1"),
+            ts: h.now + 10 * 60_000,
+            app: "selah-vault",
+            kind: "highlight.set",
+            ref: "PSA.1.1",
+            data: { color: "green" },
+          },
+        ],
+      }),
+    });
+    expect(farFuture.status).toBe(400);
+    expect(await farFuture.json()).toEqual({ error: "event.ts is too far in the future" });
+
+    const nearFuture = await h.fetch("/v2/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({
+        events: [
+          {
+            id: evId("near_ts_1"),
+            ts: h.now + 60_000,
+            app: "selah-vault",
+            kind: "highlight.set",
+            ref: "PSA.1.1",
+            data: { color: "green" },
+          },
+        ],
+      }),
+    });
+    expect(nearFuture.status).toBe(200);
+  });
+});

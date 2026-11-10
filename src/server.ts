@@ -1,7 +1,7 @@
 // Selah Vault v2 HTTP router (pure Web Standards, zero cloudflare:workers import so Bun tests run directly).
 
 import { type AuthEnv, handleAuthAndOAuth } from "./auth";
-import { clearSessionCookieHeader, extractTokenFromRequest } from "./clients";
+import { clearSessionCookieHeader, cookieWriteOriginError, extractTokenFromRequest } from "./clients";
 import { CORS_HEADERS } from "./library";
 import { mcp } from "./mcp/index";
 import { type Note, clientErrors, errorFields, noNote, observe } from "./observe";
@@ -55,6 +55,8 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
 
   if (url.pathname === "/v2" || url.pathname.startsWith("/v2/")) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+    const csrf = cookieWriteOriginError(request);
+    if (csrf) return json({ error: csrf }, 403);
     const parsed = extractTokenFromRequest(request, url.pathname === "/v2/ws");
     if (!parsed) return json({ error: "unauthorized" }, 401);
 

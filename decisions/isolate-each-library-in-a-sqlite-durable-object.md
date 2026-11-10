@@ -18,8 +18,7 @@ Split storage along the tenant boundary:
 
 1. **One SQLite Durable Object per user (`LibraryDO`):** Each `userId` (`u_<22 base64url chars>`) maps deterministically to `env.LIBRARY.idFromName(userId)`. `LibraryDO` stores that user's append-only `events` table, `event_tags`, materialized views (`passages`, `highlights`, `colors`, `blocks`, `srs_cards`, `srs_daily_stats`), SQLite `FTS5` note index (`blocks_fts`), active session/OAuth `tokens`, and hibernating WebSockets (`/v2/ws`).
 2. **Portable `SqlAdapter` engine (`src/library.ts`, `src/projector.ts`):** `LibraryEngine` talks to a synchronous SQLite interface so Cloudflare `ctx.storage.sql` in production and `bun:sqlite` in tests execute the exact same SQL schema and transactions.
-3. **Global D1 auth directory (`selah-vault-auth`):** D1 holds only cross-user identity tables (`users`, `passkeys`, `auth_challenges`, `oauth_codes`) defined in `migrations/0001_auth.sql`.
-4. **R2 snapshot bucket (`selah-vault-snapshots`):** Provisioned and bound as `env.SNAPSHOTS` for off-DO `.jsonl` library snapshots and disaster recovery exports.
+3. **Global D1 auth directory (`selah-vault-auth`):** D1 holds only cross-user identity tables (`users`, `passkeys`, `auth_challenges`, `oauth_codes`, `rate_limits`) defined in `migrations/`. No unused R2 snapshot binding is declared until a concrete backup pipeline needs it.
 
 ## Consequences
 

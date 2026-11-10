@@ -7,14 +7,14 @@ Selah Vault uses [`mise`](https://mise.jdx.dev/) ([`mise.toml`](../mise.toml)) a
 | Command | Action |
 |---|---|
 | `mise run install` | `bun install --frozen-lockfile` |
-| `mise run hygiene` | Runs `scripts/verify-repo.ts` (zero legacy identifiers, `SCOPES` SVG icons in `connect.js`, valid JSON manifests/schemas, complete ADR index) |
+| `mise run hygiene` | Runs `scripts/verify-repo.ts` (D1 id not placeholder / not live v1 prod id, zero legacy identifiers, `SCOPES` SVG icons in `connect.js`, valid JSON manifests/schemas, complete ADR index) |
 | `mise run typecheck` | Runs both `tsrs --noEmit -p tsconfig.json` and `tsc --noEmit` |
 | `mise run test` | Executes the full Bun test suite (`bun test` across `LibraryDO`, projector, OAuth 2.1, WebAuthn, MCP, CSP/look, and client SDK) |
 | `mise run dry-run` | Bundles and validates `selah-vault` + `./public` assets via `cf deploy --dry-run` |
 | `mise run jev:dry-run` | Bundles and validates `workers/selah-jev` via `wrangler deploy --dry-run` |
 | `mise run check` | Runs `hygiene`, `typecheck`, `test`, `dry-run`, and `jev:dry-run` in sequence |
 | `mise run db:migrate:local` | Applies `migrations/` to local `.wrangler/state` via `scripts/d1-local.sh` |
-| `mise run db:migrate:prod` | Applies `migrations/` to remote `selah-vault-auth` D1 |
+| `mise run db:migrate:prod` | Applies `migrations/` to remote D1 **by name** `selah-vault-auth` (never by uuid) |
 | `mise run verify` | Runs `scripts/verify-assets.ts https://vault.selah.tools` to confirm live asset hashes and security headers |
 | `mise run deploy` | Runs `check` -> `db:migrate:prod` -> `cf deploy` -> `verify` |
 
@@ -49,7 +49,6 @@ Create a custom API token in Cloudflare Dashboard -> **My Profile -> API Tokens 
 
 - **Account -> Workers Scripts -> Edit** (upload `selah-vault` Worker, Static Assets, and `LibraryDO` bindings)
 - **Account -> D1 -> Edit** (apply `migrations/` to `selah-vault-auth`)
-- **Account -> Workers R2 Storage -> Edit** (verify/bind `selah-vault-snapshots`)
 - **Account -> Account Settings -> Read** (account resolution during `cf` / `wrangler` deploy)
 
 ### Deployment Execution Order

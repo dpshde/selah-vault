@@ -257,7 +257,7 @@ export class LibraryEngine {
       }
       const validated: VaultEventInput[] = [];
       for (const item of rawEvents) {
-        const res = validateEventInput(item);
+        const res = validateEventInput(item, { nowMs: this.now() });
         if (!res.event) return jsonResp({ error: res.error ?? "invalid event" }, 400);
         if (!scopeAllowsKind(token.scopes, res.event.kind)) {
           return jsonResp({ error: `insufficient_scope for ${res.event.kind}` }, 403);
@@ -432,7 +432,7 @@ export class LibraryEngine {
         } catch {
           return jsonResp({ error: `invalid JSON on line ${i + 1}` }, 400);
         }
-        const res = validateEventInput(raw);
+        const res = validateEventInput(raw, { nowMs: this.now() });
         if (!res.event) return jsonResp({ error: `line ${i + 1}: ${res.error}` }, 400);
         events.push(res.event);
       }
