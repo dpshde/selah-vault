@@ -9,9 +9,11 @@ import { definePassageInput, defineScripturePassage } from "./vendor/scripture-i
 import {
   cancelled,
   fetchSession,
+  fetchSignInMethods,
   loginWithPasskey,
   passkeysAvailable,
   registerPasskey,
+  removeSignInMethod,
   sendEmailCode,
   signInWithApple,
   signOutSession,
@@ -70,12 +72,13 @@ function saveFilters() {
 }
 
 // The screens with a library open. The footer says only whether one is: never the key, never sync.
-const SIGNED_IN = new Set(["main", "colors", "backup", "sync"]);
+const SIGNED_IN = new Set(["main", "colors", "backup", "sync", "account"]);
 
 function show(id) {
   for (const section of document.querySelectorAll("main > section")) section.hidden = section.id !== id;
   const label = SIGNED_IN.has(id) ? "Signed in" : "Signed out";
-  for (const status of document.querySelectorAll("#auth-status, #menu-auth-status")) {
+  const status = $("#auth-status");
+  if (status) {
     status.textContent = label;
     status.hidden = false;
   }
@@ -1500,15 +1503,28 @@ function useVerseKey(yvpPublicAppKey) {
   render();
 }
 
+const authConfig = { appleClientId: null, emailConfigured: false };
+
+function applyAuthConfig() {
+  const appleOn = Boolean(authConfig.appleClientId);
+  const emailOn = Boolean(authConfig.emailConfigured);
+  if ($("#apple-login")) $("#apple-login").hidden = !appleOn;
+  if ($("#add-apple")) $("#add-apple").hidden = !appleOn;
+  if ($("#add-email")) $("#add-email").hidden = !emailOn;
+}
+
 async function loadConfig(retry = true) {
   try { useVerseKey(localStorage.getItem(YV_KEY)); } catch {}
   try {
     const res = await fetch("/config.json", { cache: "no-store" });
     if (!res.ok) throw new Error(`config ${res.status}`);
-    const { yvpPublicAppKey } = await res.json();
-    if (!yvpPublicAppKey) return;
-    try { localStorage.setItem(YV_KEY, yvpPublicAppKey); } catch {}
-    useVerseKey(yvpPublicAppKey);
+    const data = await res.json();
+    authConfig.appleClientId = data.appleClientId || null;
+    authConfig.emailConfigured = Boolean(data.emailConfigured);
+    applyAuthConfig();
+    if (!data.yvpPublicAppKey) return;
+    try { localStorage.setItem(YV_KEY, data.yvpPublicAppKey); } catch {}
+    useVerseKey(data.yvpPublicAppKey);
   } catch {
     // Offline or no server: the kept key (if any) still shows verse text; try once more shortly.
     if (retry) setTimeout(() => loadConfig(false), 2000);
@@ -1889,6 +1905,235 @@ $("#use-server").addEventListener("change", async (e) => {
   await connect();
 });
 
+
+function formatMethodDate(ms) {
+  if (!ms) return "";
+  try {
+    return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "";
+  }
+}
+
+function hideLinkEmailForms() {
+  const send = $("#link-email-send-form");
+  const verify = $("#link-email-verify-form");
+  if (send) send.hidden = true;
+  if (verify) verify.hidden = true;
+}
+
+function renderAccount() {
+  const name = library?.name || signedInUser?.name || "Personal";
+  if ($("#account-display-name")) $("#account-display-name").textContent = name;
+  if ($("#account-display-email")) $("#account-display-email").textContent = signedInUser ? "…" : "Not signed in";
+  if ($("#account-note")) $("#account-note").textContent = "";
+  hideLinkEmailForms();
+  loadMethods();
+}
+
+function methodRow({ title, detail, type, id, canRemove }) {
+  const li = document.createElement("li");
+  const meta = document.createElement("div");
+  meta.className = "grant-meta";
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  const small = document.createElement("small");
+  small.textContent = detail;
+  meta.append(strong, small);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "quiet danger";
+  btn.textContent = "Remove";
+  btn.disabled = !canRemove;
+  if (!canRemove) btn.title = "You need at least one sign-in method.";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await removeSignInMethod(id ? { type, id } : { type });
+      if ($("#account-note")) $("#account-note").textContent = "";
+      await loadMethods();
+    } catch (error) {
+      btn.disabled = false;
+      if ($("#account-note")) $("#account-note").textContent = error.message;
+    }
+  });
+  li.append(meta, btn);
+  return li;
+}
+
+async function loadMethods() {
+  const list = $("#methods-list");
+  const empty = $("#methods-empty");
+  const add = $("#methods-add");
+  if (!list || !empty) return;
+  if (!signedInUser) {
+    list.replaceChildren();
+    empty.hidden = false;
+    empty.textContent = "Sign in to manage sign-in methods.";
+    if (add) add.hidden = true;
+    hideLinkEmailForms();
+    if ($("#account-display-email")) $("#account-display-email").textContent = "Not signed in";
+    return;
+  }
+  if (add) add.hidden = false;
+  try {
+    const data = await fetchSignInMethods();
+    authConfig.emailConfigured = Boolean(data.emailConfigured);
+    applyAuthConfig();
+    if ($("#add-apple")) $("#add-apple").hidden = !data.appleConfigured;
+    if ($("#add-email")) {
+      $("#add-email").hidden = !data.emailConfigured;
+      $("#add-email").textContent = data.email ? "Change email" : "Add email";
+    }
+    if ($("#account-display-email")) {
+      $("#account-display-email").textContent = data.email || "No email linked";
+    }
+    const passkeys = Array.isArray(data.passkeys) ? data.passkeys : [];
+    const count = (data.email ? 1 : 0) + (data.apple ? 1 : 0) + passkeys.length;
+    const canRemove = count > 1;
+    const rows = [];
+    if (data.email) {
+      rows.push(methodRow({ title: data.email, detail: "Email", type: "email", canRemove }));
+    }
+    for (const pk of passkeys) {
+      const suffix = pk.suffix || String(pk.id || "").slice(-8);
+      const added = formatMethodDate(pk.created_at);
+      rows.push(methodRow({
+        title: suffix ? `Passkey · ${suffix}` : "Passkey",
+        detail: added ? `Added ${added}` : "Passkey",
+        type: "passkey",
+        id: pk.id,
+        canRemove,
+      }));
+    }
+    if (data.apple) {
+      rows.push(methodRow({ title: "Apple", detail: "Sign in with Apple", type: "apple", canRemove }));
+    }
+    list.replaceChildren(...rows);
+    empty.hidden = rows.length > 0;
+    empty.textContent = rows.length ? "" : "No sign-in methods yet.";
+  } catch (error) {
+    list.replaceChildren();
+    empty.hidden = false;
+    empty.textContent = "Couldn't load sign-in methods.";
+    if ($("#account-note")) $("#account-note").textContent = error.message;
+  }
+}
+
+let pendingLinkEmail = "";
+
+$("#add-email")?.addEventListener("click", () => {
+  if ($("#account-note")) $("#account-note").textContent = "";
+  const send = $("#link-email-send-form");
+  const verify = $("#link-email-verify-form");
+  if (verify) verify.hidden = true;
+  if (send) {
+    send.hidden = false;
+    $("#link-email-input")?.focus();
+  }
+});
+
+$("#link-email-cancel")?.addEventListener("click", () => hideLinkEmailForms());
+
+$("#link-email-send-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if ($("#account-note")) $("#account-note").textContent = "";
+  const email = String(new FormData(e.target).get("email") ?? "").trim();
+  if (!email) return;
+  try {
+    await sendEmailCode(email);
+    pendingLinkEmail = email;
+    $("#link-email-sent-note").textContent = `Enter the 6-digit code sent to ${email}.`;
+    $("#link-email-send-form").hidden = true;
+    $("#link-email-verify-form").hidden = false;
+    $("#link-otp-input")?.focus();
+  } catch (error) {
+    if ($("#account-note")) $("#account-note").textContent = error.message;
+  }
+});
+
+$("#link-email-back")?.addEventListener("click", () => {
+  $("#link-email-verify-form").hidden = true;
+  $("#link-email-send-form").hidden = false;
+  $("#link-email-input")?.focus();
+});
+
+$("#link-email-verify-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if ($("#account-note")) $("#account-note").textContent = "";
+  const code = String(new FormData(e.target).get("code") ?? "").trim();
+  try {
+    await verifyEmailCode(pendingLinkEmail, code);
+    hideLinkEmailForms();
+    await loadMethods();
+    if ($("#account-note")) $("#account-note").textContent = "Email linked to this account.";
+  } catch (error) {
+    if ($("#account-note")) $("#account-note").textContent = error.message;
+  }
+});
+
+async function ensureAppleSdk(clientId) {
+  if (globalThis.AppleID?.auth) {
+    if (clientId && !globalThis.AppleID.auth._vaultInit) {
+      globalThis.AppleID.auth.init({
+        clientId,
+        scope: "name email",
+        redirectURI: `${location.origin}/auth/apple`,
+        usePopup: true,
+      });
+      globalThis.AppleID.auth._vaultInit = true;
+    }
+    return true;
+  }
+  if (!clientId) return false;
+  await new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-apple-auth]');
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
+    script.dataset.appleAuth = "true";
+    script.addEventListener("load", resolve, { once: true });
+    script.addEventListener("error", reject, { once: true });
+    document.head.append(script);
+  });
+  if (!globalThis.AppleID?.auth) return false;
+  globalThis.AppleID.auth.init({
+    clientId,
+    scope: "name email",
+    redirectURI: `${location.origin}/auth/apple`,
+    usePopup: true,
+  });
+  globalThis.AppleID.auth._vaultInit = true;
+  return true;
+}
+
+$("#add-apple")?.addEventListener("click", async () => {
+  if ($("#account-note")) $("#account-note").textContent = "";
+  try {
+    const clientId = authConfig.appleClientId;
+    if (!clientId || clientId === true) {
+      throw new Error("Sign in with Apple isn't configured on this server yet.");
+    }
+    const ok = await ensureAppleSdk(clientId);
+    if (!ok || !globalThis.AppleID?.auth) {
+      throw new Error("Sign in with Apple isn't available in this browser.");
+    }
+    const resp = await globalThis.AppleID.auth.signIn();
+    const idToken = resp?.authorization?.id_token;
+    if (!idToken) throw new Error("Apple did not return an identity token.");
+    const fullName = [resp?.user?.name?.firstName, resp?.user?.name?.lastName].filter(Boolean).join(" ").trim();
+    await signInWithApple(idToken, { name: fullName || undefined });
+    await loadMethods();
+    if ($("#account-note")) $("#account-note").textContent = "Apple linked to this account.";
+  } catch (error) {
+    if (!cancelled(error) && $("#account-note")) $("#account-note").textContent = error.message;
+  }
+});
+
 for (const back of document.querySelectorAll(".back")) back.addEventListener("click", () => (show("main"), render()));
 
 // ---- the library's name, edited in place
@@ -1959,9 +2204,10 @@ function menuAction(sel, fn) {
   }
 }
 
-menuAction("#open-sync", () => (renderSync(), ($("#access-note").textContent = ""), show("sync")));
+menuAction("#open-sync", () => (renderSync(), show("sync")));
 menuAction("#open-colors", () => (renderColors(), show("colors")));
 menuAction("#open-backup", () => (($("#backup-note").textContent = ""), show("backup")));
+menuAction("#open-account", () => (renderAccount(), show("account")));
 
 /** Runs a button on a settings screen, saying how it went in that screen's status line. */
 function screenAction(id, note, fn) {
@@ -1981,7 +2227,11 @@ async function addPasskey() {
   return "Passkey added. Use it to sign in on any device.";
 }
 
-screenAction("#add-passkey", "#access-note", addPasskey);
+screenAction("#add-passkey", "#account-note", async () => {
+  const said = await addPasskey();
+  await loadMethods();
+  return said;
+});
 
 $("#offer-passkey")?.addEventListener("click", async () => {
   try {

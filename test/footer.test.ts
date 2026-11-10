@@ -34,9 +34,9 @@ test("the contract link goes where For developers' spec link does", () => {
   expect(html).toContain('<span>For developers</span><span><a href="https://github.com/dpshde/selah-vault/blob/main/SPEC.md"');
 });
 
-test("the ••• menu is Sync · Colors · Backup, then theme/contract/status on phones, then Log out", () => {
+test("the ••• menu is Sync · Colors · Backup · Account, then theme and Contract on phones; every row has an icon", () => {
   expect(html.match(/theme-toggle/g)).toHaveLength(2);
-  expect(html).toContain('id="menu-auth-status"');
+  expect(html).not.toContain('id="menu-auth-status"');
   expect(html).not.toContain('id="modes-menu"');
   expect(html).not.toContain('id="panel-slot"');
   const header = /<section id="main"[\s\S]*?<header>([\s\S]*?)<\/header>/.exec(html)?.[1] ?? "";
@@ -46,11 +46,20 @@ test("the ••• menu is Sync · Colors · Backup, then theme/contract/status
   expect(menu).toContain('id="open-sync"');
   expect(menu).toContain('id="open-colors"');
   expect(menu).toContain('id="open-backup"');
+  expect(menu).toContain('id="open-account"');
   expect(menu).toContain("menu-theme");
   expect(menu).toContain("menu-link");
-  expect(menu).toContain('id="menu-auth-status"');
-  expect(menu).toContain('id="lock"');
-  expect(css).toMatch(/@media \(min-width: 601px\)[\s\S]*?#menu \.menu-theme/);
+  expect(menu).not.toContain('id="lock"');
+  expect(menu).not.toContain("Log out");
+  for (const id of ["open-sync", "open-colors", "open-backup", "open-account"]) {
+    const row = new RegExp(`<(button|a)[^>]*id="${id}"[\\s\\S]*?</\\1>`).exec(menu)?.[0] ?? "";
+    expect(row).toMatch(/<svg[^>]*stroke="currentColor"[^>]*stroke-width="1\.9"/);
+    expect(row).toMatch(/width="16"/);
+  }
+  const contract = /<a class="menu-link"[\s\S]*?<\/a>/.exec(menu)?.[0] ?? "";
+  expect(contract).toMatch(/<svg[^>]*stroke="currentColor"[^>]*stroke-width="1\.9"/);
+  expect(css).toMatch(/@media \(min-width: 601px\)[\s\S]*?#menu > div \.menu-theme/);
+  expect(css).toMatch(/#menu > div button > svg[\s\S]*?width: 16px/);
 });
 
 test("the footer never says anything about sync, and auth status is only signed in or out", () => {
@@ -59,8 +68,9 @@ test("the footer never says anything about sync, and auth status is only signed 
   expect(visible).not.toMatch(/online|offline|syncing/);
   const show = /function show\(id\) \{([\s\S]*?)\n\}/.exec(app)?.[1] ?? "";
   expect(show).toContain('SIGNED_IN.has(id) ? "Signed in" : "Signed out"');
-  expect(show).toContain("#auth-status, #menu-auth-status");
-  expect(app).toContain('const SIGNED_IN = new Set(["main", "colors", "backup", "sync"]);');
+  expect(show).toContain('$("#auth-status")');
+  expect(show).not.toContain("menu-auth-status");
+  expect(app).toContain('const SIGNED_IN = new Set(["main", "colors", "backup", "sync", "account"]);');
   expect(app).not.toContain("function placeMenu()");
 });
 
@@ -72,16 +82,16 @@ test("top-down flow on desktop and phone: #add then #list-bar above #filters and
   expect(css).not.toContain("#chrome-dock");
   expect(css).toMatch(/#main:not\(\[hidden\]\)\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column/);
   expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?min-height:\s*44px/);
-  expect(css).toMatch(/body:has\(#main:not\(\[hidden\]\), #colors:not\(\[hidden\]\), #backup:not\(\[hidden\]\), #sync:not\(\[hidden\]\)\) > \.shell-meta \{[\s\S]*?display: none/);
+  expect(css).toMatch(/body:has\(#main:not\(\[hidden\]\), #colors:not\(\[hidden\]\), #backup:not\(\[hidden\]\), #sync:not\(\[hidden\]\), #account:not\(\[hidden\]\)\) > \.shell-meta \{[\s\S]*?display: none/);
 });
 
-test("phone ••• stays in <header> (reachable even when library is empty); sheet holds theme/contract/status", () => {
+test("phone ••• stays in <header> (reachable even when library is empty); sheet holds theme and Contract", () => {
   const mobile = css.slice(css.indexOf("@media (max-width: 600px)"));
   expect(mobile).toContain("--dock-pad-x: .75rem");
   expect(mobile).toMatch(/#menu > summary \{[\s\S]*?min-height: 44px;/);
-  expect(mobile).toMatch(/#menu > div button,[\s\S]*?\.menu-status \{[\s\S]*?min-height: 44px;/);
+  expect(mobile).toMatch(/#menu > div button,[\s\S]*?min-height: 44px;/);
   expect(css).toContain("details > div { position: absolute; right: 0; top: calc(100% - 1px);");
-  expect(css).toContain("#menu > div { min-width: 12rem; padding: 0; }");
+  expect(css).toContain("#menu > div { min-width: 13.5rem; padding: 0; }");
 });
 
 test("desktop uses segmented mode buttons in #list-bar; mobile (≤600px) uses a <select>", () => {

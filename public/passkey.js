@@ -144,3 +144,14 @@ export async function signOutSession({ fetch: fetchFn = globalThis.fetch.bind(gl
   await fetchFn("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
 }
 
+export async function fetchSignInMethods({ fetch: fetchFn = globalThis.fetch.bind(globalThis) } = {}) {
+  const res = await fetchFn("/auth/methods", { credentials: "same-origin", cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data;
+}
+
+export async function removeSignInMethod(body, { fetch: fetchFn } = {}) {
+  return postJson("/auth/methods/remove", body, fetchFn);
+}
+

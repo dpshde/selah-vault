@@ -1,7 +1,7 @@
 // Selah Vault v2 HTTP router (pure Web Standards, zero cloudflare:workers import so Bun tests run directly).
 
 import { fetchStaticAsset } from "./assets";
-import { type AuthEnv, handleAuthAndOAuth } from "./auth";
+import { type AuthEnv, emailDeliveryConfigured, handleAuthAndOAuth } from "./auth";
 import { clearSessionCookieHeader, cookieWriteOriginError, extractTokenFromRequest } from "./clients";
 import { CORS_HEADERS } from "./library";
 import { mcp } from "./mcp/index";
@@ -39,7 +39,11 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
     return fetchStaticAsset(env.ASSETS, request, "/");
   }
   if (url.pathname === "/config.json" && isRead) {
-    return json({ yvpPublicAppKey: env.YVP_PUBLIC_APP_KEY || null });
+    return json({
+      yvpPublicAppKey: env.YVP_PUBLIC_APP_KEY || null,
+      appleClientId: env.APPLE_CLIENT_ID || null,
+      emailConfigured: emailDeliveryConfigured(env),
+    });
   }
   if (url.pathname === "/api/client-error") {
     return clientError(request, note);

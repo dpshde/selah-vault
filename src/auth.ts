@@ -21,6 +21,7 @@ import {
   sha256B64u,
   sha256Bytes,
   sha256Hex,
+  cookieWriteOriginError,
   validateOAuthClient,
 } from "./clients";
 import { CORS_HEADERS } from "./library";
@@ -608,6 +609,12 @@ async function handleEmailVerify(request: Request, env: AuthEnv, nowMs: number):
   const code = typeof body.code === "string" ? body.code.trim() : "";
   if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return json({ error: "invalid email or code" }, 400);
 
+  const session = await verifyBearerOrCookie(env, request);
+  if (session) {
+    const csrf = cookieWriteOriginError(request);
+    if (csrf) return json({ error: csrf }, 403);
+  }
+
   const verifyLimit = await bumpRateLimit(
     env.DB,
     `email_verify:${email}`,
@@ -633,6 +640,23 @@ async function handleEmailVerify(request: Request, env: AuthEnv, nowMs: number):
   }
   await env.DB.prepare("DELETE FROM auth_challenges WHERE id = ?").bind(row.id).run();
 
+  // Linking never merges two existing accounts (each user owns its own LibraryDO).
+  // If this email already belongs to someone else, return 409 and leave both accounts alone.
+  if (session) {
+    const taken = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+      .bind(email)
+      .first<{ id: string }>();
+    if (taken && taken.id !== session.parsed.userId) {
+      return json({ error: LINKED_ELSEWHERE }, 409);
+    }
+    await env.DB.prepare("UPDATE users SET email = ? WHERE id = ?").bind(email, session.parsed.userId).run();
+    const user = await env.DB.prepare("SELECT id, email, name FROM users WHERE id = ?")
+      .bind(session.parsed.userId)
+      .first<{ id: string; email: string | null; name: string }>();
+    if (!user) return json({ error: "user not found" }, 404);
+    return issueSessionResponse(env, request, user);
+  }
+
   let user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?")
     .bind(email)
     .first<{ id: string; email: string | null; name: string }>();
@@ -654,6 +678,12 @@ async function handleAppleAuth(request: Request, env: AuthEnv, nowMs: number): P
   } catch {
     return json({ error: "invalid JSON" }, 400);
   }
+  const session = await verifyBearerOrCookie(env, request);
+  if (session) {
+    const csrf = cookieWriteOriginError(request);
+    if (csrf) return json({ error: csrf }, 403);
+  }
+
   const idToken = typeof body.id_token === "string" ? body.id_token : typeof body.identityToken === "string" ? body.identityToken : "";
   const parts = idToken.split(".");
   if (parts.length !== 3) return json({ error: "invalid id_token format" }, 400);
@@ -702,6 +732,42 @@ async function handleAppleAuth(request: Request, env: AuthEnv, nowMs: number): P
 
   const sub = payload.sub;
   const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : null;
+
+  if (session) {
+    const bySub = await env.DB.prepare("SELECT id FROM users WHERE apple_sub = ?")
+      .bind(sub)
+      .first<{ id: string }>();
+    if (bySub && bySub.id !== session.parsed.userId) {
+      return json({ error: LINKED_ELSEWHERE }, 409);
+    }
+    if (email) {
+      const byEmail = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+        .bind(email)
+        .first<{ id: string }>();
+      if (byEmail && byEmail.id !== session.parsed.userId) {
+        return json({ error: LINKED_ELSEWHERE }, 409);
+      }
+    }
+    const current = await env.DB.prepare("SELECT email, name FROM users WHERE id = ?")
+      .bind(session.parsed.userId)
+      .first<{ email: string | null; name: string }>();
+    if (!current) return json({ error: "user not found" }, 404);
+    // Attach Apple to this account. Keep an existing email — Apple's Hide My Email
+    // relay must not silently replace a verified address. Fill email only when unset.
+    if (!current.email && email) {
+      await env.DB.prepare("UPDATE users SET apple_sub = ?, email = ? WHERE id = ?")
+        .bind(sub, email, session.parsed.userId)
+        .run();
+    } else {
+      await env.DB.prepare("UPDATE users SET apple_sub = ? WHERE id = ?").bind(sub, session.parsed.userId).run();
+    }
+    return issueSessionResponse(env, request, {
+      id: session.parsed.userId,
+      email: current.email ?? email,
+      name: current.name,
+    });
+  }
+
   let user = await env.DB.prepare("SELECT id, email, name FROM users WHERE apple_sub = ?")
     .bind(sub)
     .first<{ id: string; email: string | null; name: string }>();
@@ -724,6 +790,121 @@ async function handleAppleAuth(request: Request, env: AuthEnv, nowMs: number): P
     user = { id, email, name };
   }
   return issueSessionResponse(env, request, user);
+}
+
+const LINKED_ELSEWHERE = "already linked to another account";
+const LAST_METHOD_ERROR = "cannot remove the last sign-in method";
+
+function parseTransports(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function credentialSuffix(id: string): string {
+  const compact = id.replace(/[^A-Za-z0-9]/g, "");
+  const src = compact || id;
+  return src.slice(-8);
+}
+
+async function countSignInMethods(db: D1Database, userId: string): Promise<number> {
+  const user = await db
+    .prepare("SELECT email, apple_sub FROM users WHERE id = ?")
+    .bind(userId)
+    .first<{ email: string | null; apple_sub: string | null }>();
+  const passkeys = await db
+    .prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?")
+    .bind(userId)
+    .first<{ n: number }>();
+  return (user?.email ? 1 : 0) + (user?.apple_sub ? 1 : 0) + (passkeys?.n ?? 0);
+}
+
+type OwnerAuth =
+  | { verified: NonNullable<Awaited<ReturnType<typeof verifyBearerOrCookie>>> }
+  | { error: Response };
+
+async function requireOwnerSession(env: AuthEnv, request: Request): Promise<OwnerAuth> {
+  const csrf = cookieWriteOriginError(request);
+  if (csrf) return { error: json({ error: csrf }, 403) };
+  const verified = await verifyBearerOrCookie(env, request);
+  if (!verified) return { error: json({ error: "unauthorized" }, 401) };
+  if (!verified.scopes.includes("*")) return { error: json({ error: "owner session required" }, 403) };
+  return { verified };
+}
+
+async function methodsPayload(env: AuthEnv, userId: string) {
+  const user = await env.DB.prepare("SELECT email, apple_sub FROM users WHERE id = ?")
+    .bind(userId)
+    .first<{ email: string | null; apple_sub: string | null }>();
+  const passkeys = await env.DB.prepare(
+    "SELECT credential_id, transports, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at ASC",
+  )
+    .bind(userId)
+    .all<{ credential_id: string; transports: string | null; created_at: number }>();
+  return {
+    email: user?.email ?? null,
+    apple: Boolean(user?.apple_sub),
+    appleConfigured: Boolean(env.APPLE_CLIENT_ID),
+    emailConfigured: emailDeliveryConfigured(env),
+    passkeys: passkeys.results.map((row) => ({
+      id: row.credential_id,
+      suffix: credentialSuffix(row.credential_id),
+      created_at: row.created_at,
+      transports: parseTransports(row.transports),
+    })),
+  };
+}
+
+async function handleMethodsGet(request: Request, env: AuthEnv): Promise<Response> {
+  const auth = await requireOwnerSession(env, request);
+  if ("error" in auth) return auth.error;
+  return json(await methodsPayload(env, auth.verified.parsed.userId));
+}
+
+async function handleMethodsRemove(request: Request, env: AuthEnv): Promise<Response> {
+  const auth = await requireOwnerSession(env, request);
+  if ("error" in auth) return auth.error;
+  let body: Record<string, unknown>;
+  try {
+    const text = await request.text();
+    body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    return json({ error: "invalid JSON" }, 400);
+  }
+  const type = typeof body.type === "string" ? body.type : typeof body.method === "string" ? body.method : "";
+  const userId = auth.verified.parsed.userId;
+  if ((await countSignInMethods(env.DB, userId)) <= 1) {
+    return json({ error: LAST_METHOD_ERROR }, 400);
+  }
+
+  if (type === "email") {
+    const row = await env.DB.prepare("SELECT email FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ email: string | null }>();
+    if (!row?.email) return json({ error: "email is not linked" }, 400);
+    await env.DB.prepare("UPDATE users SET email = NULL WHERE id = ?").bind(userId).run();
+  } else if (type === "apple") {
+    const row = await env.DB.prepare("SELECT apple_sub FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ apple_sub: string | null }>();
+    if (!row?.apple_sub) return json({ error: "Apple is not linked" }, 400);
+    await env.DB.prepare("UPDATE users SET apple_sub = NULL WHERE id = ?").bind(userId).run();
+  } else if (type === "passkey") {
+    const id = typeof body.id === "string" ? body.id : "";
+    if (!id) return json({ error: "missing passkey id" }, 400);
+    const row = await env.DB.prepare("SELECT credential_id FROM passkeys WHERE credential_id = ? AND user_id = ?")
+      .bind(id, userId)
+      .first<{ credential_id: string }>();
+    if (!row) return json({ error: "passkey not found" }, 404);
+    await env.DB.prepare("DELETE FROM passkeys WHERE credential_id = ? AND user_id = ?").bind(id, userId).run();
+  } else {
+    return json({ error: "unknown method type" }, 400);
+  }
+  return json(await methodsPayload(env, userId));
 }
 
 async function handleMe(request: Request, env: AuthEnv): Promise<Response> {
@@ -966,6 +1147,9 @@ export async function handleAuthAndOAuth(request: Request, env: AuthEnv): Promis
   if (path === "/auth/apple" && method === "POST") return handleAppleAuth(request, env, nowMs);
   if (path === "/auth/me" && method === "GET") return handleMe(request, env);
   if (path === "/auth/logout" && method === "POST") return handleLogout(request, env);
+  if (path === "/auth/methods" && method === "GET") return handleMethodsGet(request, env);
+  if (path === "/auth/methods" && method === "DELETE") return handleMethodsRemove(request, env);
+  if (path === "/auth/methods/remove" && method === "POST") return handleMethodsRemove(request, env);
 
   return null;
 }
