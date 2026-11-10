@@ -2,6 +2,7 @@
 // and OAuth 2.1 Authorization Code + PKCE (S256) for Selah Vault v2.
 
 import { fetchStaticAsset } from "./assets";
+import { EMAIL_OTP_TTL_MS, signInCodeEmail } from "./email";
 import {
   OAUTH_CODE_TTL_MS,
   OAUTH_GRANT_TTL_SEC,
@@ -28,6 +29,7 @@ export interface EmailMessage {
   to: string;
   subject: string;
   text: string;
+  html: string;
   code: string;
 }
 
@@ -505,6 +507,7 @@ async function dispatchEmail(env: AuthEnv, msg: EmailMessage): Promise<void> {
       to: [msg.to],
       subject: msg.subject,
       text: msg.text,
+      html: msg.html,
     }),
   });
   if (!res.ok) {
@@ -548,7 +551,7 @@ async function handleEmailSend(request: Request, env: AuthEnv, nowMs: number): P
   const rand = crypto.getRandomValues(new Uint32Array(1))[0] % 900_000;
   const code = String(100_000 + rand);
   const secretHash = await sha256Hex(`${email}:${code}`);
-  const expiresAt = nowMs + 10 * 60_000;
+  const expiresAt = nowMs + EMAIL_OTP_TTL_MS;
 
   // Resend updates the code in place and MUST preserve attempts so brute-force
   // progress is not reset by requesting a fresh email.
@@ -580,10 +583,12 @@ async function handleEmailSend(request: Request, env: AuthEnv, nowMs: number): P
   }
 
   try {
+    const mail = signInCodeEmail(code);
     await dispatchEmail(env, {
       to: email,
-      subject: `${code} is your Selah Vault sign-in code`,
-      text: `Your Selah Vault verification code is ${code}. It expires in 10 minutes.`,
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
       code,
     });
   } catch {
