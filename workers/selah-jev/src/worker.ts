@@ -22,6 +22,7 @@ export const MAX_TOPIC_CHARS = 200;
 export const VAULT_ORIGINS = new Set([
   "https://vault.selah.tools",
   "https://sync.selah.tools",
+  "https://selah-vault.dpshade.workers.dev",
   "http://localhost:8787",
   "http://127.0.0.1:8787",
 ]);
