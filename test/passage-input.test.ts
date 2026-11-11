@@ -123,6 +123,14 @@ test("chapter, verse, and range suggestions render a sticky header and pure-numb
     expect(list.children[1].textContent).toBe("1");
     expect(list.children[29].textContent).toBe("29");
 
+    f.input.value = "Ezekiel 36:26-27";
+    f.suggest();
+    expect(list.dataset.kind).toBe("range");
+    expect(list.children[0].className).toBe("si-grid-head");
+    expect(list.children[0].children[0].textContent).toBe("Ezekiel 36");
+    expect(list.children[1].textContent).toBe("–27");
+    expect(list.children[1].textContent).not.toContain("undefined");
+
     f.input.value = "Joh";
     f.suggest();
     expect(list.dataset.kind).toBe("book");

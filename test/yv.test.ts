@@ -51,3 +51,11 @@ test("the caller's app_key is dropped; the fonts stylesheet gets the Worker's", 
   await yvProxy(get("/yv/v1/fonts/1/stylesheet?app_key=CALLER"), "KEY", { fetch: up.fetch, cache: null });
   expect(up.calls[0].url).toBe("https://api.youversion.com/v1/fonts/1/stylesheet?app_key=KEY");
 });
+
+test("an unreplaced placeholder key is treated as missing and never sent upstream", async () => {
+  const up = upstream();
+  const deps = { fetch: up.fetch, cache: null };
+  expect((await yvProxy(get("/yv/v1/bibles/3034/passages/ROM.8.18"), "YVP_PUBLIC_APP_KEY", deps)).status).toBe(404);
+  expect((await yvProxy(get("/yv/v1/fonts/1/stylesheet?app_key=YVP_PUBLIC_APP_KEY"), "YVP_PUBLIC_APP_KEY", deps)).status).toBe(404);
+  expect(up.calls).toEqual([]);
+});

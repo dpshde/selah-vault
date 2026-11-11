@@ -6,7 +6,7 @@ import { clearSessionCookieHeader, cookieWriteOriginError, extractTokenFromReque
 import { CORS_HEADERS } from "./library";
 import { mcp } from "./mcp/index";
 import { type Note, clientErrors, errorFields, noNote, observe } from "./observe";
-import { YV_PREFIX, yvProxy } from "./yv";
+import { YV_PREFIX, usableYvpAppKey, yvProxy } from "./yv";
 
 export type Env = AuthEnv;
 
@@ -40,7 +40,7 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
   }
   if (url.pathname === "/config.json" && isRead) {
     return json({
-      yvpPublicAppKey: env.YVP_PUBLIC_APP_KEY || null,
+      yvpPublicAppKey: usableYvpAppKey(env.YVP_PUBLIC_APP_KEY) || null,
       appleClientId: env.APPLE_CLIENT_ID || null,
       emailConfigured: emailDeliveryConfigured(env),
     });
@@ -49,7 +49,7 @@ export async function handle(request: Request, env: Env, note: Note = noNote): P
     return clientError(request, note);
   }
   if (url.pathname.startsWith(`${YV_PREFIX}/`)) {
-    return yvProxy(request, env.YVP_PUBLIC_APP_KEY, { fetch: (u, i) => fetch(u, i), cache: edgeCache() });
+    return yvProxy(request, usableYvpAppKey(env.YVP_PUBLIC_APP_KEY), { fetch: (u, i) => fetch(u, i), cache: edgeCache() });
   }
   if (url.pathname === "/mcp") {
     return mcp(request, env.LIBRARY, note);

@@ -677,6 +677,16 @@ describe("Linking sign-in methods to one account", () => {
     expect(onCfg.emailConfigured).toBe(true);
   });
 
+  test("GET /config.json hides an unreplaced YVP_PUBLIC_APP_KEY placeholder", async () => {
+    const bad = createTestEnv({ YVP_PUBLIC_APP_KEY: "YVP_PUBLIC_APP_KEY" });
+    const badCfg = (await (await bad.fetch("/config.json")).json()) as { yvpPublicAppKey: string | null };
+    expect(badCfg.yvpPublicAppKey).toBeNull();
+
+    const good = createTestEnv({ YVP_PUBLIC_APP_KEY: "real-app-key-for-tests" });
+    const goodCfg = (await (await good.fetch("/config.json")).json()) as { yvpPublicAppKey: string | null };
+    expect(goodCfg.yvpPublicAppKey).toBe("real-app-key-for-tests");
+  });
+
   test("unauthenticated GET /auth/methods is 401", async () => {
     const h = createTestEnv();
     expect((await h.fetch("/auth/methods")).status).toBe(401);

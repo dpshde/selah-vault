@@ -131,7 +131,7 @@ index 6780b42e10f3a5415c64a25c435f5556f478ada2..b660fd644e83d69413268591fc5a5cd6
 +			if (n) {
 +				a.setAttribute("aria-label", o ? `${s} (${o})` : s);
 +				let t = i.canonical.split(".");
-+				a.textContent = e === "chapter" ? t[1] : e === "verse" ? t[2] : `–${i.canonical.split("-")[1].split(".")[2]}`;
++				a.textContent = e === "chapter" ? t[1] : e === "verse" ? t[2] : `–${(i.canonical.split("-")[1] || "").split(".").pop()}`;
 +			} else if (a.textContent = s, o) {
  				let e = document.createElement("span");
 -				e.className = "si-passage-count", e.setAttribute("part", "count"), e.textContent = r, n.append(e);

@@ -117,6 +117,13 @@ function flash(text, action) {
 const errorIn = (form, text) => (form.querySelector(".error").textContent = text);
 const capitalized = (s) => s[0].toUpperCase() + s.slice(1);
 const colorName = (c) => c.name || (c.builtIn ? capitalized(c.id) : "Color");
+/** Built-in color ids already have a row dot; only show a chip for a real category name. */
+function categoryLabel(c) {
+  const name = (c?.name ?? "").trim();
+  if (!name) return "";
+  if (c.builtIn && name.toLowerCase() === String(c.id ?? "").toLowerCase()) return "";
+  return name;
+}
 
 function paint(el, id) {
   const c = colors.find((x) => x.id === id) ?? colors[0];
@@ -1645,10 +1652,11 @@ function row({ ref: runRef, records }) {
     chev.setAttribute("aria-hidden", "true");
     link.append(chev);
   }
-  if (colorObj?.name) {
+  const category = categoryLabel(colorObj);
+  if (category) {
     const cat = document.createElement("span");
     cat.className = "row-category";
-    cat.textContent = colorObj.name;
+    cat.textContent = category;
     link.append(cat);
   }
   const quote = document.createElement("span");
@@ -1767,12 +1775,19 @@ const themeNow = setupThemeToggle(document.querySelectorAll(".theme-toggle"), {
 // book button shows on every load even when /config.json is slow, rate limited or offline; a failed
 // fetch is retried once.
 const YV_KEY = "selah-vault:yv-key";
+/** Drop a missing key or the unreplaced Worker placeholder so it never reaches YouVersion. */
+function usableVerseKey(yvpPublicAppKey) {
+  const key = (yvpPublicAppKey ?? "").trim();
+  if (!key || key === "YVP_PUBLIC_APP_KEY") return null;
+  return key;
+}
 function useVerseKey(yvpPublicAppKey) {
-  if (!yvpPublicAppKey || verseText.key === yvpPublicAppKey) return;
+  const key = usableVerseKey(yvpPublicAppKey);
+  if (!key || verseText.key === key) return;
   if (!verseText.key) {
-    defineKeepingLoaded(() => defineScripturePassage({ yvpPublicAppKey }));
+    defineKeepingLoaded(() => defineScripturePassage({ yvpPublicAppKey: key }));
   }
-  verseText.key = yvpPublicAppKey;
+  verseText.key = key;
   render();
 }
 
@@ -1784,7 +1799,11 @@ function applyAuthConfig() {
 }
 
 async function loadConfig(retry = true) {
-  try { useVerseKey(localStorage.getItem(YV_KEY)); } catch {}
+  try {
+    const kept = usableVerseKey(localStorage.getItem(YV_KEY));
+    if (kept) useVerseKey(kept);
+    else if (localStorage.getItem(YV_KEY)) localStorage.removeItem(YV_KEY);
+  } catch {}
   try {
     const res = await fetch("/config.json", { cache: "no-store" });
     if (!res.ok) throw new Error(`config ${res.status}`);
@@ -1792,9 +1811,10 @@ async function loadConfig(retry = true) {
     authConfig.appleClientId = data.appleClientId || null;
     authConfig.emailConfigured = Boolean(data.emailConfigured);
     applyAuthConfig();
-    if (!data.yvpPublicAppKey) return;
-    try { localStorage.setItem(YV_KEY, data.yvpPublicAppKey); } catch {}
-    useVerseKey(data.yvpPublicAppKey);
+    const key = usableVerseKey(data.yvpPublicAppKey);
+    if (!key) return;
+    try { localStorage.setItem(YV_KEY, key); } catch {}
+    useVerseKey(key);
   } catch {
     // Offline or no server: the kept key (if any) still shows verse text; try once more shortly.
     if (retry) setTimeout(() => loadConfig(false), 2000);

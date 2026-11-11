@@ -35,7 +35,9 @@ test("rows use external-link arrow, chevron + category tag, desktop hover reveal
   expect(globeLine).toContain("M15 3h6v6");
   expect(globeLine).not.toContain("<circle");
   expect(app).toContain('chev.className = "row-chevron"');
+  expect(app).toContain("function categoryLabel(c)");
   expect(app).toContain('cat.className = "row-category"');
+  expect(app).toContain("cat.textContent = category");
   expect(app).toContain('labelRef(run.ref).replaceAll("–", "-")');
   expect(app).toContain('b.className = "color-option"');
   expect(css).toContain("#color-pop .color-option");
