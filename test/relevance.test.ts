@@ -453,6 +453,41 @@ describe("relevance session", () => {
     expect(bodies[0].highlights.map((h) => h.id)).toEqual(["ROM.5.3-4"]);
     expect(bodies[1].highlights.map((h) => h.id)).toEqual(["ROM.5.3-4"]);
   });
+
+  test("prepareItems fetches missing verse text concurrently, not one ref at a time", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const started: string[] = [];
+    const slowText = {
+      get: async (ref: string) => {
+        started.push(ref);
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 40));
+        inFlight--;
+        return { text: `text of ${ref}`, truncated: false, fetchRef: ref };
+      },
+      first() {},
+      warm() {},
+    };
+    const session = createRelevance({
+      lib: "lib1",
+      jevUrl: "https://jev.test",
+      fetch: (async () =>
+        new Response(JSON.stringify({ answers: {} }), { headers: { "content-type": "application/json" } }),
+      ) as typeof fetch,
+      verseText: slowText,
+    });
+    session.setTopicInput("grace");
+    const items = ["JHN.3.16", "ROM.8.28", "PSA.23.1", "ROM.5.8"].map((ref) => ({ id: ref, ref }));
+    const t0 = performance.now();
+    await session.judgeTopic(items, "grace");
+    const elapsed = performance.now() - t0;
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(started).toHaveLength(4);
+    // Four 40ms serial gets would be ≥160ms plus hashing; concurrent should be well under that.
+    expect(elapsed).toBeLessThan(140);
+  });
 });
 
 describe("batching and ranking helpers", () => {

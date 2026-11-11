@@ -2241,6 +2241,12 @@ body:has(#main:not([hidden])) .shell-meta { flex-shrink: 0; }
     margin: 0 0 1rem;
     padding: 0;
   }
+  /* #sync .sync-actions { display: flex } is more specific than .sync-actions[hidden]
+     and would keep "Sign in to sync" visible on phones after the row is hidden. */
+  #sync .sync-actions[hidden],
+  #account .account-signin[hidden] {
+    display: none;
+  }
   #account .method-slot {
     padding: 0;
   }
