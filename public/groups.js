@@ -6,16 +6,16 @@ import { groupRuns, recordTime, runTime } from "./ranges.js";
 
 export { recordTime, runTime };
 
-export const MODES = ["date", "genre", "related"];
+export const MODES = ["date", "genre"];
 export const GROUP_MODES = ["date", "genre"];
 /** Passage-ranked modes (filter then sort). Topic search is orthogonal chrome in #list-bar, not a mode. */
-export const RANK_MODES = ["related"];
+export const RANK_MODES = []; // Related is an omni-card action, not a list mode.
 /** Persisted `groupBy` from when Topic was a 5th mode; migrate to `date`. */
 export const LEGACY_TOPIC_MODE = "topic";
 /** Persisted modes before Relevant+Surprising merged into Related; migrate to `related`. */
-export const LEGACY_RELATED_MODES = ["relevant", "surprising"];
+export const LEGACY_RELATED_MODES = ["relevant", "surprising", "related"];
 /** Any list mode that uses Jev passage ranking. Topic search uses Jev too, but is not a mode. */
-export const JEV_MODES = ["related"];
+export const JEV_MODES = [];
 
 /** The Protestant canon's genres, each a span of books in canonical order (BOOKS indexes). */
 export const GENRES = [

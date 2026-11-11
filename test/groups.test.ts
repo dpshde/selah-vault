@@ -87,14 +87,15 @@ test("by genre: canonical order inside each genre, runs within it, empty genres 
   ]);
 });
 
-test("modes are Date · Genre · Related; legacy topic and Relevant/Surprising migrate away from the strip", () => {
-  expect(MODES).toEqual(["date", "genre", "related"]);
+test("modes are Date · Genre; legacy topic, Relevant/Surprising, and Related migrate off the strip", () => {
+  expect(MODES).toEqual(["date", "genre"]);
   expect(MODES).not.toContain("topic");
   expect(MODES).not.toContain("relevant");
   expect(MODES).not.toContain("surprising");
-  expect(JEV_MODES).toEqual(["related"]);
+  expect(MODES).not.toContain("related");
+  expect(JEV_MODES).toEqual([]);
   expect(LEGACY_TOPIC_MODE).toBe("topic");
-  expect(LEGACY_RELATED_MODES).toEqual(["relevant", "surprising"]);
+  expect(LEGACY_RELATED_MODES).toEqual(["relevant", "surprising", "related"]);
 });
 
 test("Today and Last 7 days start open; Older and every genre start closed; Jev ranked group starts open", () => {
@@ -103,6 +104,6 @@ test("Today and Last 7 days start open; Older and every genre start closed; Jev 
   expect(startsOpen("date", "older")).toBe(false);
   for (const g of GENRES) expect(startsOpen("genre", g.id)).toBe(false);
   expect(startsOpen("related", "ranked")).toBe(true);
-  // Topic search reuses the same ranked group id while modes stay Date/Genre/Related.
+  // Topic and Related results reuse the ranked group id on top of Date/Genre.
   expect(startsOpen("date", "ranked")).toBe(true);
 });

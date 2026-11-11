@@ -95,54 +95,41 @@ test("phone ••• stays in <header> (reachable even when library is empty); 
 });
 
 test("desktop uses segmented mode buttons in #list-bar; mobile (≤600px) uses a <select>", () => {
-  for (const mode of ["date", "genre", "related"]) {
+  for (const mode of ["date", "genre"]) {
     expect(html).toContain(`data-mode="${mode}"`);
     expect(html).toContain(`<option value="${mode}">`);
   }
+  expect(html).not.toContain('data-mode="related"');
   expect(html).not.toContain('data-mode="topic"');
   expect(html).not.toContain('data-mode="relevant"');
   expect(html).not.toContain('data-mode="surprising"');
+  expect(html).not.toContain('<option value="related">');
   expect(html).not.toContain('<option value="topic">');
-  expect(html).not.toContain('<option value="relevant">');
-  expect(html).not.toContain('<option value="surprising">');
-  expect(html).toContain('id="topic-search-toggle"');
-  expect(html).toContain('id="topic-search"');
-  expect(html).toContain('id="topic-search-close"');
+  expect(html).not.toContain('id="topic-search');
   expect(html).toContain('id="group-by-select"');
   expect(html).toContain('id="related-sort"');
+  expect(html).toContain('id="omni-card"');
   expect(html).toContain('aria-label="Sort highlights"');
   expect(html).toContain('aria-label="Order related highlights"');
   expect(html).not.toContain("mode-icon");
   expect(css).toContain(".list-bar .segmented");
-  expect(css).toContain(".topic-search-toggle");
-  expect(css).toContain(".list-bar .topic-search");
   expect(css).toContain(".related-sort");
+  expect(css).toContain(".omni-card");
   expect(css).toMatch(/\.list-bar \.segmented button\s*\{[^}]*flex:\s*1 0 auto/);
   expect(css).toContain(".mode-select");
   expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.list-bar \.segmented \{ display: none; \}/);
   expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.mode-select:not\(\[hidden\]\) \{[\s\S]*?display: block;/);
   expect(app).toContain("function selectMode(next)");
   expect(app).toContain("function selectRelatedSort");
-  expect(app).toContain("function commitRelatedRank");
+  expect(app).toContain("function submitOmni");
+  expect(app).toContain("function showOmniCard");
   expect(app).toContain("function rankSkeleton");
   expect(app).toContain('$("#group-by-select").value = groupBy');
-  expect(app).toContain("function openTopicSearch");
-  expect(app).toContain("function closeTopicSearch");
-  expect(app).toContain("function exitTopicSearch");
-  expect(app).toContain("function syncAddHiddenForTopicSearch");
-  expect(css).toContain(".list-bar-top:has(.topic-search-wrap.is-open) .segmented");
-  expect(css).toContain(".list-bar-top:has(.topic-search-wrap.is-open) .filter-menu");
-  expect(css).toContain(".topic-search-close");
+  expect(app).not.toContain("function openTopicSearch");
   expect(css).toContain(".rank-skeleton");
   expect(css).toContain("prefers-reduced-motion: reduce");
-  // Phone resting: icon + mode select share a row; open search keeps Filter beside the field.
+  expect(css).toContain("outline-offset: -2px");
   expect(css).toMatch(/@media \(max-width: 600px\)[\s\S]*?\.mode-select:not\(\[hidden\]\) \{[\s\S]*?flex:\s*1 1 0/);
-  expect(css).toContain(".list-bar-top:has(.topic-search-wrap.is-open) .mode-select:not([hidden])");
-  expect(css).toMatch(/\.topic-search-wrap\.is-open\s*\{[^}]*flex:\s*1 1 0/);
-  expect(css).not.toMatch(/\.topic-search-wrap\.is-open\s*\{[^}]*order:\s*-1/);
-  expect(css).toMatch(/\.topic-search-wrap:not\(\.is-open\) \.topic-search\s*\{[^}]*max-width:\s*0/);
-  expect(css).toContain("transition: opacity .2s ease, max-width .2s ease");
-  expect(css).toContain(".topic-search-wrap.is-open .topic-search-close");
 });
 
 test("phone Colors/Sync/Backup are top-aligned pages with header close and pinned Done", () => {

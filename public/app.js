@@ -4,7 +4,8 @@ import {
 import { labelRef, compareRefs } from "./refs.js";
 import { editRun, highlightRecord, tombstone, groupRuns } from "./ranges.js";
 import { readPassage } from "./passage.js";
-import { MODES, RANK_MODES, LEGACY_TOPIC_MODE, LEGACY_RELATED_MODES, JEV_MODES, groupList, startsOpen } from "./groups.js";
+import { classifyOmni, routeOmniSubmit, searchInsteadLabel, versesToPassageId, OMNI_PLACEHOLDER, OMNI_PLACEHOLDER_PHONE, OMNI_ARIA } from "./omni.js";
+import { MODES, LEGACY_TOPIC_MODE, LEGACY_RELATED_MODES, groupList, startsOpen } from "./groups.js";
 import { definePassageInput, defineScripturePassage } from "./vendor/scripture-inline.js";
 import {
   cancelled,
@@ -299,13 +300,10 @@ async function highlight(verses, color) {
 
 // The reference field is scripture-inline's <si-passage-input>: book, chapter and verse suggestions
 // as people type. Its value is a USFM id like ROM.5.3-5 once it reads a passage.
-// Related hijacks the same field as the ranking scope (no second passage box).
+// Enter / Go classifies the field as a reference (show the passage card), a bare book
+// name (card + "Search instead"), or a topic (rank the list).
 definePassageInput();
 const refField = $("#ref");
-const REF_ADD = { placeholder: "John 3:16", aria: "Verse or passage" };
-const REF_RANK = { placeholder: "Rom 8:18–25", aria: "Passage to rank highlights against" };
-/** Last #ref string that started a Related commit (dedupes change+blur). Cleared while typing. */
-let lastRelatedCommitKey = "";
 /** What's in a passage field: its passage id when it read one, else the typed text, which readPassage reads
  * more loosely (the field won't take passages across chapters, like Genesis 1–2, but Selah Vault does). */
 function refText(field = refField) {
@@ -315,146 +313,172 @@ function refText(field = refField) {
 /** Whether the field's suggestion list is showing (Enter and Escape act on it first). */
 const suggesting = (field) => field.shadowRoot?.querySelector("[role=listbox]")?.hidden === false;
 
-/** Sanitized text in the list-bar topic search, or "" when empty. */
+/** Sanitized topic currently driving the list, or "". */
+let omniTopic = "";
+/** "browse" (Date/Genre) | "related" (card Related action) | "topic" (omni topic submit). */
+let listView = "browse";
+/** classifyOmni result shown on the passage card, or null. */
+let omniCardState = null;
+
 function topicQuery() {
-  return sanitizeTopic($("#topic-search")?.value ?? "");
+  return omniTopic;
 }
 
-/**
- * While topic search is open (or has a query), hide #add so only one text field is visible.
- * Collapse restores the add/rank row; Relevant/Surprising epigraph returns via showRankPreview.
- */
-function syncAddHiddenForTopicSearch(searchOpen) {
-  const form = $("#add");
-  if (form) form.hidden = searchOpen;
-  if (searchOpen) {
-    const epigraph = $("#rank-epigraph");
-    if (epigraph) {
-      epigraph.hidden = true;
-      epigraph.textContent = "";
-    }
-  } else if (!topicQuery() && RANK_MODES.includes(groupBy) && relevance?.passage) {
-    showRankPreview(relevance.passage);
-  }
+function omniPlaceholder() {
+  return matchMedia("(max-width: 600px)").matches ? OMNI_PLACEHOLDER_PHONE : OMNI_PLACEHOLDER;
 }
 
-/** Expand the list-bar topic search from its resting icon into the text field. */
-function openTopicSearch({ focus = true } = {}) {
-  const wrap = $("#topic-search-wrap");
-  const toggle = $("#topic-search-toggle");
-  const field = $("#topic-search");
-  const close = $("#topic-search-close");
-  if (!wrap || !toggle || !field) return;
-  wrap.classList.add("is-open");
-  toggle.setAttribute("aria-expanded", "true");
-  field.tabIndex = 0;
-  if (close) close.tabIndex = 0;
-  syncAddHiddenForTopicSearch(true);
-  if (focus) field.focus();
+/** Topics and bare book names are valid omni input; don't leave si-passage-input's passage error ring. */
+function clearOmniValidity() {
+  const input = refField.shadowRoot?.querySelector("input") ?? refField.input;
+  input?.removeAttribute("aria-invalid");
+  refField.internals?.setValidity?.({});
 }
 
-/**
- * Collapse topic search back to the icon. Stays expanded while the query is non-empty
- * unless `force` (close ×, Escape, or empty outside tap). Restores #add.
- */
-function closeTopicSearch({ force = false } = {}) {
-  if (!force && topicQuery()) return;
-  const wrap = $("#topic-search-wrap");
-  const toggle = $("#topic-search-toggle");
-  const field = $("#topic-search");
-  const close = $("#topic-search-close");
-  if (!wrap || !toggle || !field) return;
-  wrap.classList.remove("is-open");
-  toggle.setAttribute("aria-expanded", "false");
-  field.tabIndex = -1;
-  if (close) close.tabIndex = -1;
-  syncAddHiddenForTopicSearch(false);
-}
-
-/**
- * Fully exit topic search: clear any query (same path as typing empty), collapse chrome, restore #add.
- * One Escape / close × always lands back on highlight chrome — never stuck with #add hidden.
- */
-function exitTopicSearch({ focusToggle = true } = {}) {
-  const field = $("#topic-search");
-  const toggle = $("#topic-search-toggle");
-  if (field && topicQuery()) {
-    field.value = "";
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  closeTopicSearch({ force: true });
-  if (focusToggle) toggle?.focus();
-}
-
-/** Map Closest|Surprising chrome to the rankVerdicts mode key (relevant = closest-first). */
-function relatedRankMode() {
-  return relatedSort === "surprising" ? "surprising" : "relevant";
-}
-
-/** Show Closest|Surprising only once Related has a non-empty ranked list (hide while empty/loading/search). */
-function syncRelatedSortChrome(show) {
-  const bar = $("#related-sort");
-  if (!bar) return;
-  bar.hidden = !show;
-  for (const b of bar.querySelectorAll("[data-related-sort]")) {
-    b.setAttribute("aria-pressed", String(b.dataset.relatedSort === relatedSort));
-  }
-}
-
-/** Swap #add between add-highlight and passage-ranking (#ref) chrome. Topic search is orthogonal in #list-bar. */
 function syncRefFieldMode() {
-  const ranking = RANK_MODES.includes(groupBy);
-  const meta = ranking ? REF_RANK : REF_ADD;
-  refField.setAttribute("placeholder", meta.placeholder);
-  refField.setAttribute("aria-label", meta.aria);
-  // si-passage-input copies aria-label only on connect; keep the inner input in sync.
-  refField.shadowRoot?.querySelector("input")?.setAttribute("aria-label", meta.aria);
+  refField.setAttribute("placeholder", omniPlaceholder());
+  refField.setAttribute("aria-label", OMNI_ARIA);
+  refField.shadowRoot?.querySelector("input")?.setAttribute("aria-label", OMNI_ARIA);
   refField.hidden = false;
   const form = $("#add");
-  form.classList.toggle("rank-scope", ranking);
-  $("#add-dot").hidden = ranking;
-  form.querySelector('button[type="submit"]').hidden = ranking;
+  form.classList.remove("rank-scope");
+  $("#add-dot").hidden = false;
+  form.querySelector('button[type="submit"]').hidden = false;
 }
 
-/**
- * Related ranks on commit only (Enter / autocomplete change / blur with a passage) — never while typing.
- * Dedupes change+blur for the same ref so one pick does not double-fetch.
- */
-function commitRelatedRank() {
-  if (!RANK_MODES.includes(groupBy) || topicQuery()) return;
-  const key = String(refText(refField)).trim();
-  // Dedupe change+blur; allow retry after a failed commit for the same ref.
-  if (key && key === lastRelatedCommitKey && !rankFailed) return;
-  lastRelatedCommitKey = key;
+function closeOmniCard() {
+  omniCardState = null;
+  const card = $("#omni-card");
+  if (card) card.hidden = true;
+  const title = $("#omni-card-title");
+  if (title) title.textContent = "";
+  $("#omni-card-passage")?.replaceChildren();
+  const instead = $("#omni-card-instead");
+  if (instead) instead.hidden = true;
+}
+
+function showOmniCard(classified) {
+  omniCardState = classified;
+  const card = $("#omni-card");
+  const title = $("#omni-card-title");
+  const host = $("#omni-card-passage");
+  const instead = $("#omni-card-instead");
+  const searchBtn = $("#omni-card-search");
+  if (!card || !title || !host) return;
+  title.textContent = classified.label;
+  if (classified.kind === "ambiguous") {
+    searchBtn.textContent = searchInsteadLabel(classified.search || classified.query);
+    instead.hidden = false;
+  } else if (instead) {
+    instead.hidden = true;
+  }
+  host.replaceChildren();
+  const skel = document.createElement("div");
+  skel.className = "omni-skel";
+  skel.setAttribute("aria-hidden", "true");
+  skel.innerHTML = "<i></i><i></i><i></i>";
+  host.append(skel);
+  const id = versesToPassageId(classified.verses);
+  if (id && verseText?.key) {
+    const el = document.createElement("si-passage");
+    el.className = "verse-text";
+    el.setAttribute("yvp-bible-version-id", "3034");
+    el.setAttribute("passage-id", id);
+    el.setAttribute("reference", "citation");
+    el.setAttribute("theme", themeNow());
+    el.setAttribute("headings", "hide");
+    if (location.protocol === "https:") el.setAttribute("yvp-api-host", `${location.host}/yv`);
+    styleScripture(el);
+    el.hidden = true;
+    const reveal = () => {
+      skel.remove();
+      el.hidden = false;
+    };
+    el.addEventListener("scripture-load", reveal, { once: true });
+    el.addEventListener("scripture-error", reveal, { once: true });
+    host.append(el);
+  }
+  card.hidden = false;
+}
+
+function omniPassageInput() {
+  if (!omniCardState) return "";
+  return omniCardState.kind === "ambiguous" ? omniCardState.label : omniCardState.query;
+}
+
+function submitOmni() {
+  const form = $("#add");
+  const routed = routeOmniSubmit(refText());
+  if (routed.action === "noop") return;
+  errorIn(form, "");
+  clearOmniValidity();
+  if (routed.action === "topic") {
+    closeOmniCard();
+    omniTopic = sanitizeTopic(routed.classified.query);
+    listView = "topic";
+    void runTopic();
+    return;
+  }
+  omniTopic = "";
+  if (listView === "topic") {
+    listView = "browse";
+    rankGeneration++;
+    rankOrder = [];
+    rankFailed = false;
+    rankPending = null;
+    relevance?.clearPassage();
+    showRelevanceNone(null);
+    render();
+  }
+  showOmniCard(routed.classified);
+}
+
+async function highlightFromCard() {
+  if (!omniCardState?.verses?.length) return;
+  const form = $("#add");
+  await highlight(omniCardState.verses, new FormData(form).get("color"));
+}
+
+function relatedFromCard() {
+  if (!omniCardState?.verses?.length) return;
+  omniTopic = "";
+  listView = "related";
   void runRelevance();
 }
 
-// Enter: settle suggestions first; else rank (Related) or add a highlight (Date/Genre).
+function searchInsteadFromCard() {
+  const q = omniCardState?.search || omniCardState?.query;
+  if (!q) return;
+  closeOmniCard();
+  omniTopic = sanitizeTopic(q);
+  listView = "topic";
+  const input = refField.shadowRoot?.querySelector("input") ?? refField.input;
+  if (input && omniTopic) input.value = omniTopic;
+  clearOmniValidity();
+  void runTopic();
+}
+
+// Enter: settle suggestions first; else classify (card or topic).
 refField.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || e.isComposing) return;
   if (suggesting(refField)) return;
-  if (RANK_MODES.includes(groupBy)) {
-    e.preventDefault();
-    commitRelatedRank();
-    return;
-  }
-  $("#add").requestSubmit();
+  e.preventDefault();
+  submitOmni();
 });
 
-$("#add").addEventListener("submit", async (e) => {
+$("#add").addEventListener("submit", (e) => {
   e.preventDefault();
-  // Ranking modes never add from this form — #ref is the scope field (Highlight is hidden).
-  if (RANK_MODES.includes(groupBy)) {
-    commitRelatedRank();
-    return;
-  }
-  const form = e.target;
-  const found = readPassage(refText());
-  if (found.error) return errorIn(form, found.error);
-  errorIn(form, "");
-  await highlight(found.verses, new FormData(form).get("color"));
-  refField.value = "";
+  submitOmni();
 });
+refField.addEventListener("focusout", () => clearOmniValidity());
+addEventListener("resize", () => {
+  if (refField.getAttribute("placeholder") !== omniPlaceholder()) syncRefFieldMode();
+}, { passive: true });
+
+$("#omni-card-close")?.addEventListener("click", () => closeOmniCard());
+$("#omni-card-highlight")?.addEventListener("click", () => void highlightFromCard());
+$("#omni-card-related")?.addEventListener("click", () => relatedFromCard());
+$("#omni-card-search")?.addEventListener("click", () => searchInsteadFromCard());
 
 // ---- saving from a link: /save?ref=John+3:16&color=blue
 
@@ -531,8 +555,8 @@ function render() {
 
   const shown = filter.size ? rows.filter((r) => filter.has(topColor(r, ids))) : rows;
   // Topic search in #list-bar owns the list while it has a query; modes stay visible underneath.
-  const searching = !!topicQuery();
-  const jevActive = RANK_MODES.includes(groupBy) && !searching;
+  const searching = listView === "topic" && !!topicQuery();
+  const jevActive = listView === "related";
   // Scope is path-specific: a leftover Related passage must not count as topic search scope (and vice versa).
   const hasScope = searching ? !!relevance?.topic : jevActive ? !!relevance?.passage : false;
   // A failed call keeps Date order. Pending keeps Jev chrome (skeleton) after commit before results land.
@@ -544,11 +568,11 @@ function render() {
   // Empty topic search shows no CTA panel — only the quiet field placeholder.
   const jevWaiting = jevActive && !rankFailed && !hasScope && !rankPending && !relatedDrafting;
   const noneRelevant =
-    ranking && !rankPending && !searching && !!relevance?.passage && RANK_MODES.includes(groupBy) && rankOrder.length === 0 && shown.length > 0;
+    ranking && !rankPending && !searching && !!relevance?.passage && jevActive && rankOrder.length === 0 && shown.length > 0;
   $("#empty").hidden = rows.length > 0;
   $("#empty").textContent = "No highlights yet.";
   showRelevanceNone(noneRelevant ? { count: shown.length, passage: relevance.passage } : null);
-  showRankPreview(ranking && !rankPending && !searching && relevance?.passage && RANK_MODES.includes(groupBy) ? relevance.passage : null);
+  showRankPreview(null);
   renderGroupBy(rows.length > 0);
   // A row being edited stays as it is until the edit ends (a sync mid-edit would wipe the field);
   // finishing the edit renders again.
@@ -557,7 +581,7 @@ function render() {
   // replay its opening animation.
   const scopeKey = searching
     ? relevance?.topic || ""
-    : RANK_MODES.includes(groupBy)
+    : jevActive
       ? relevance?.passage?.ref || ""
       : "";
   // verseText.open is omitted: expand/collapse is local (wireTextToggle/showText). Including it
@@ -618,11 +642,11 @@ function render() {
         rankedGroup.classList.add("rank-enter");
         $("#list").replaceChildren(rankedGroup);
         // Closest|Surprising is results chrome for Related — not for topic search.
-        showRelatedSort = !searching && RANK_MODES.includes(groupBy);
+        showRelatedSort = jevActive && !searching;
       } else {
         // Zero survivors (passage modes). Topic search keeps every highlight, so this is rare.
         // Never put topicCopy in the foot with an empty list.
-        $("#list-total").textContent = searching ? "" : RANK_MODES.includes(groupBy) ? totalCopy(0, shown.length) : "";
+        $("#list-total").textContent = searching ? "" : jevActive ? totalCopy(0, shown.length) : "";
         $("#list").replaceChildren();
       }
       $("#empty").hidden = true; // library has rows; zero relevant uses #relevance-none, not #empty
@@ -638,7 +662,7 @@ function render() {
     syncRelatedSortChrome(showRelatedSort);
   } else if (!editing) {
     // Sig unchanged: still refresh Closest|Surprising pressed state if results are showing.
-    const rankedVisible = ranking && !rankPending && rankOrder.length > 0 && !searching && RANK_MODES.includes(groupBy);
+    const rankedVisible = ranking && !rankPending && rankOrder.length > 0 && !searching && jevActive;
     syncRelatedSortChrome(!!rankedVisible);
   }
   listSig = editing ? null : sig;
@@ -715,7 +739,7 @@ function applyRankAutoExpand(topRef) {
 // ---- grouping / ranking: Date and Genre group; Related ranks against a passage (Closest|Surprising order).
 // Topic search is orthogonal chrome in #list-bar (not a mode).
 
-/** Load persisted mode; migrate legacy Topic → Date and Relevant/Surprising → Related. */
+/** Load persisted mode; migrate legacy Topic / Relevant / Surprising / Related → Date. */
 function readGroupBy() {
   const stored = localStorage.getItem(GROUP_BY) ?? "";
   if (stored === LEGACY_TOPIC_MODE) {
@@ -725,8 +749,8 @@ function readGroupBy() {
   if (LEGACY_RELATED_MODES.includes(stored)) {
     // Keep Surprising preference as the Closest|Surprising order after the mode merge.
     if (stored === "surprising") localStorage.setItem(RELATED_SORT, "surprising");
-    localStorage.setItem(GROUP_BY, "related");
-    return "related";
+    localStorage.setItem(GROUP_BY, "date");
+    return "date";
   }
   return MODES.includes(stored) ? stored : "date";
 }
@@ -754,39 +778,28 @@ function renderGroupBy(any) {
 }
 
 function selectMode(next) {
-  if (!MODES.includes(next) || next === groupBy) return;
-  const wasJev = JEV_MODES.includes(groupBy);
-  const willJev = JEV_MODES.includes(next);
-  const wasPassage = RANK_MODES.includes(groupBy);
-  const willPassage = RANK_MODES.includes(next);
-  const searching = !!topicQuery();
+  if (!MODES.includes(next)) return;
+  const sameMode = next === groupBy;
+  // Date / Genre also exit a Related or topic result list back to the browse grouping.
+  const leavingResults = listView !== "browse";
+  if (sameMode && !leavingResults) return;
   groupBy = next;
   localStorage.setItem(GROUP_BY, groupBy);
-  // Leaving Related: clear ranking scope from #ref so Date/Genre don't inherit it as an add.
-  // Topic search stays — it is orthogonal chrome, not a mode.
-  if (wasPassage && !willPassage) clearRankScopeFromRef();
-  if (wasJev && !willJev && !searching) clearRelevanceInput({ keepRef: wasPassage, keepSearch: true });
-  // Entering Related from Date/Genre: start with an empty rank field (don't rank a half-typed add).
-  if (willPassage && !wasPassage) {
-    refField.value = "";
-    errorIn($("#add"), "");
-  }
-  renderGroupBy(!!$("#list-bar") && !$("#list-bar").hidden);
-  // Search owns the list until cleared; only persist the mode for when the field empties.
-  if (searching) {
-    render();
-    return;
-  }
-  if (willPassage && refText(refField).trim()) {
-    void runRelevance();
-  } else {
-    if (willPassage) relevance?.clearPassage();
+  if (leavingResults) {
+    listView = "browse";
+    omniTopic = "";
+    rankGeneration++;
     rankOrder = [];
     rankFailed = false;
-    verseText.open = null;
-    beginRankPaint({ resetUser: true });
-    render();
+    rankPending = null;
+    relevance?.clearPassage();
+    showRelevanceNone(null);
+    showRankPreview(null);
   }
+  renderGroupBy(!!$("#list-bar") && !$("#list-bar").hidden);
+  verseText.open = null;
+  beginRankPaint({ resetUser: true });
+  render();
 }
 
 /** Closest | Surprising results order for Related (reorders cached verdicts; no new network call). */
@@ -796,7 +809,7 @@ function selectRelatedSort(next) {
   relatedSort = next;
   localStorage.setItem(RELATED_SORT, relatedSort);
   syncRelatedSortChrome(true);
-  if (!RANK_MODES.includes(groupBy) || topicQuery() || !relevance?.passage || rankFailed) {
+  if (listView !== "related" || !relevance?.passage || rankFailed) {
     render();
     return;
   }
@@ -812,19 +825,10 @@ for (const b of document.querySelectorAll("#related-sort [data-related-sort]")) 
   b.addEventListener("click", () => selectRelatedSort(b.dataset.relatedSort));
 }
 
-/** Clear #ref ranking text and restore add-mode placeholder/aria (Highlight stays until renderGroupBy). */
-function clearRankScopeFromRef() {
-  lastRelatedCommitKey = "";
-  refField.value = "";
-  errorIn($("#add"), "");
-}
-
-function clearRelevanceInput({ keepRef = false, keepSearch = false } = {}) {
-  if (!keepRef) clearRankScopeFromRef();
-  if (!keepSearch) {
-    const topicField = $("#topic-search");
-    if (topicField) topicField.value = "";
-  }
+function clearRelevanceInput() {
+  omniTopic = "";
+  listView = "browse";
+  closeOmniCard();
   errorIn($("#add"), "");
   rankGeneration++; // drop any in-flight response
   relevance?.clearPassage();
@@ -835,8 +839,6 @@ function clearRelevanceInput({ keepRef = false, keepSearch = false } = {}) {
   verseText.open = null;
   showRelevanceNone(null);
   showRankPreview(null);
-  // Collapse after clearing passage so syncAddHiddenForTopicSearch doesn't revive the epigraph.
-  if (!keepSearch) closeTopicSearch({ force: true });
 }
 
 /**
@@ -957,7 +959,12 @@ $("#relevance-none-chapter").addEventListener("click", () => {
   const ref = $("#relevance-none").dataset.ref;
   const chapter = chapterRefOf(ref);
   if (!chapter) return;
-  refField.value = labelRef(chapter);
+  const label = labelRef(chapter);
+  refField.value = label;
+  const routed = routeOmniSubmit(label);
+  if (routed.action === "card") showOmniCard(routed.classified);
+  listView = "related";
+  omniTopic = "";
   void runRelevance();
 });
 
@@ -999,9 +1006,9 @@ function currentRuns() {
 async function runRelevance() {
   const session = await ensureRelevance();
   // Topic search owns the list while it has a query; don't race passage ranking underneath.
-  if (!session || !RANK_MODES.includes(groupBy) || topicQuery()) return;
+  if (!session || listView === "topic") return;
   const form = $("#add");
-  const raw = refText(refField);
+  const raw = omniPassageInput() || refText(refField);
   const gen = ++rankGeneration;
   // Drop prior results immediately so a slow second call can't flash an intermediate list.
   rankOrder = [];
@@ -1069,9 +1076,8 @@ async function runTopic() {
     session.clearPassage();
     rankPending = null;
     if (gen !== rankGeneration) return;
-    // Restore the selected mode's list (Related re-ranks from #ref when present).
-    if (RANK_MODES.includes(groupBy) && refText(refField).trim()) void runRelevance();
-    else render();
+    listView = "browse";
+    render();
     return;
   }
   rankPending = true;
@@ -1108,128 +1114,11 @@ async function reorderRelevance() {
   render();
 }
 
-// Ranking input is #ref (hijacked in Related). Autocomplete stays on that one field.
-// Typing clears stale results only — Jev runs on commit (Enter / change / blur), not on a debounce.
+// Typing in the omni field does not auto-run ranking; Enter / Go submits.
 refField.addEventListener("input", () => {
-  if (!RANK_MODES.includes(groupBy) || topicQuery()) return;
-  lastRelatedCommitKey = "";
   const form = $("#add");
-  const raw = refText(refField);
-  if (!String(raw).trim()) errorIn(form, "");
-  // Leave the old ranked list immediately when the passage changes.
-  rankGeneration++; // no network until commit
-  rankOrder = [];
-  rankFailed = false;
-  beginRankPaint({ resetUser: true });
-  verseText.open = null;
-  showRelevanceNone(null);
-  showRankPreview(null);
-  if (String(raw).trim()) {
-    // Keep list chrome in the ranking path without implying a fetch yet (no Ranking… copy).
-    rankPending = null;
-    relevance?.clearPassage();
-  } else {
-    relevance?.clearPassage();
-    rankPending = null;
-  }
-  render();
+  if (!String(refText(refField)).trim()) errorIn(form, "");
 });
-
-// Autocomplete / passage pick that finalizes a ref (si-passage-input bubbles change).
-refField.addEventListener("change", () => {
-  commitRelatedRank();
-});
-
-// Blur commit when the field holds a passage (invalid → inline error, no Jev). Deferred so an
-// accept's change event wins and lastRelatedCommitKey dedupes the pair.
-refField.addEventListener("focusout", () => {
-  setTimeout(() => {
-    if (!RANK_MODES.includes(groupBy) || topicQuery()) return;
-    if (refField.contains(document.activeElement) || refField.shadowRoot?.activeElement) return;
-    if (!String(refText(refField)).trim()) return;
-    commitRelatedRank();
-  }, 0);
-});
-
-{
-  const topicField = $("#topic-search");
-  const topicToggle = $("#topic-search-toggle");
-  const topicClose = $("#topic-search-close");
-  /** Last topic string that started a commit (dedupes Enter+blur). Cleared while typing. */
-  let lastTopicCommitKey = "";
-  topicToggle.addEventListener("click", () => openTopicSearch());
-  // Close ×: clear + collapse in one step (mousedown so the field doesn't blur first).
-  topicClose?.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    exitTopicSearch();
-  });
-  topicClose?.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    e.preventDefault();
-    exitTopicSearch();
-  });
-  topicField.addEventListener("input", () => {
-    lastTopicCommitKey = "";
-    const form = $("#add");
-    const cleaned = sanitizeTopic(topicField.value);
-    if (!cleaned) errorIn(form, "");
-    // Stay expanded while typing a query; empty alone does not collapse (blur/Escape/× does).
-    if (cleaned) openTopicSearch({ focus: false });
-    // Search owns the list whenever the field has a query — independent of Date/Genre/Related.
-    // Clear stale results while typing; Jev runs on Enter/blur only (same commit rule as Related).
-    rankGeneration++;
-    rankOrder = [];
-    rankFailed = false;
-    beginRankPaint({ resetUser: true });
-    verseText.open = null;
-    showRelevanceNone(null);
-    showRankPreview(null);
-    if (cleaned) {
-      rankPending = null;
-      relevance?.setTopicInput(cleaned);
-      render();
-    } else {
-      relevance?.clearPassage();
-      rankPending = null;
-      // Restore Related from #ref on clear (commit-style restore, not a mid-type fire).
-      if (RANK_MODES.includes(groupBy) && refText(refField).trim()) {
-        lastRelatedCommitKey = "";
-        commitRelatedRank();
-      } else render();
-    }
-  });
-  function commitTopicSearch() {
-    const cleaned = topicQuery();
-    if (!cleaned) return;
-    if (cleaned === lastTopicCommitKey) return;
-    lastTopicCommitKey = cleaned;
-    void runTopic();
-  }
-  topicField.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      // One Escape fully exits — clear query if any, collapse, restore #add.
-      exitTopicSearch();
-      return;
-    }
-    if (e.key !== "Enter" || e.isComposing) return;
-    e.preventDefault();
-    commitTopicSearch();
-  });
-  topicField.addEventListener("blur", () => {
-    // Commit a non-empty query on blur; collapse only when empty.
-    if (topicQuery()) commitTopicSearch();
-    closeTopicSearch();
-  });
-  // Empty open search: tap outside collapses and restores #add. Non-empty keeps results (use × / Escape).
-  document.addEventListener("pointerdown", (e) => {
-    const wrap = $("#topic-search-wrap");
-    if (!wrap?.classList.contains("is-open")) return;
-    if (e.target instanceof Node && wrap.contains(e.target)) return;
-    if (topicQuery()) return;
-    closeTopicSearch({ force: true });
-  }, true);
-}
 
 /** Skeleton rows while Related/topic waits on Jev after commit — matches list row rhythm. */
 function rankSkeleton(count = 4) {
@@ -1550,7 +1439,7 @@ function wireTextToggle(toggle, li, runRef) {
   toggle.addEventListener("focus", warm);
   toggle.addEventListener("click", () => {
     // Manual open/close during this query — don't let the next mode-switch paint override it.
-    if (JEV_MODES.includes(groupBy) || topicQuery()) rankUserTouched = true;
+    if (listView !== "browse") rankUserTouched = true;
     const wasOpen = verseText.open === runRef;
     clearOpenVerseText();
     for (const other of document.querySelectorAll("#list .row-link[aria-expanded]")) other.setAttribute("aria-expanded", "false");
