@@ -13,6 +13,8 @@ export default defineConfig({
 		compatibilityDate: "2026-09-01",
 		entrypoint: "src/worker.ts",
 		workersDev: true,
+		// Production hostnames, moved from hidden-word at cutover. workers.dev stays for staging.
+		domains: ["vault.selah.tools", "sync.selah.tools"],
 		observability: {
 			enabled: true,
 			redactQueryString: true,
