@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'sha256-XzQJF0k+abov+t0ACj84jSNjSc8AufHDLsXhdM4GhmA=' 'sha256-gvWpHh5BbGCzm7dereEmanZ9QZEptkeh/20lDxJ/7Mw=' https://cdn.youversion.com https://api.youversion.com; font-src 'self' https://cdn.youversion.com; img-src 'self' data:; connect-src 'self' https://api.youversion.com https://jev.selah.tools; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://appleid.cdn-apple.com; style-src 'self' 'sha256-XzQJF0k+abov+t0ACj84jSNjSc8AufHDLsXhdM4GhmA=' 'sha256-gvWpHh5BbGCzm7dereEmanZ9QZEptkeh/20lDxJ/7Mw=' https://cdn.youversion.com https://api.youversion.com; font-src 'self' https://cdn.youversion.com; img-src 'self' data:; connect-src 'self' https://api.youversion.com https://jev.selah.tools https://appleid.apple.com; frame-src https://appleid.apple.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   Permissions-Policy: publickey-credentials-get=(self), publickey-credentials-create=(self)

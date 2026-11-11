@@ -21,6 +21,12 @@ import {
   signOutSession,
   verifyEmailCode,
 } from "./passkey.js";
+import {
+  appleErrorMessage,
+  applePopupSignIn,
+  idTokenFromAppleResponse,
+  preloadAppleSdk,
+} from "./apple-auth.js";
 import { clientInfo } from "./grants.js";
 import { setupThemeToggle } from "./theme-toggle.js";
 import { registerSelahVaultTools } from "./webmcp.js";
@@ -275,19 +281,14 @@ $("#email-verify-form")?.addEventListener("submit", async (e) => {
 $("#apple-login")?.addEventListener("click", async () => {
   $("#start-error").textContent = "";
   try {
-    if (globalThis.AppleID?.auth) {
-      const resp = await globalThis.AppleID.auth.signIn();
-      const idToken = resp?.authorization?.id_token;
-      if (!idToken) throw new Error("Apple did not return an identity token.");
-      const fullName = [resp?.user?.name?.firstName, resp?.user?.name?.lastName].filter(Boolean).join(" ").trim();
-      const res = await signInWithApple(idToken, { name: fullName || undefined });
-      const user = res?.user ?? (await fetchSession());
-      await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
-      return;
-    }
-    location.assign("/unlock");
+    // signIn() must run in this turn of the click — no await before it (iOS Safari).
+    const resp = await applePopupSignIn();
+    const { idToken, name } = idTokenFromAppleResponse(resp);
+    const res = await signInWithApple(idToken, { name });
+    const user = res?.user ?? (await fetchSession());
+    await enter({ id: user?.id || "personal", name: user?.name || "Personal", online: true });
   } catch (error) {
-    if (!cancelled(error)) $("#start-error").textContent = error.message;
+    if (!cancelled(error)) $("#start-error").textContent = appleErrorMessage(error);
   }
 });
 
@@ -1811,6 +1812,7 @@ async function loadConfig(retry = true) {
     authConfig.appleClientId = data.appleClientId || null;
     authConfig.emailConfigured = Boolean(data.emailConfigured);
     applyAuthConfig();
+    preloadAppleSdk(authConfig.appleClientId);
     const key = usableVerseKey(data.yvpPublicAppKey);
     if (!key) return;
     try { localStorage.setItem(YV_KEY, key); } catch {}
@@ -2244,6 +2246,7 @@ function emailFormsOpen() {
 let passkeysExpanded = false;
 
 function renderAccount() {
+  preloadAppleSdk(authConfig.appleClientId);
   const name = library?.name || signedInUser?.name || "Personal";
   if ($("#account-display-name")) $("#account-display-name").textContent = name;
   if ($("#account-display-email")) $("#account-display-email").textContent = signedInUser ? "…" : "Local library on this device";
@@ -2571,65 +2574,20 @@ $("#link-email-verify-form")?.addEventListener("submit", async (e) => {
   }
 });
 
-async function ensureAppleSdk(clientId) {
-  if (globalThis.AppleID?.auth) {
-    if (clientId && !globalThis.AppleID.auth._vaultInit) {
-      globalThis.AppleID.auth.init({
-        clientId,
-        scope: "name email",
-        redirectURI: `${location.origin}/auth/apple`,
-        usePopup: true,
-      });
-      globalThis.AppleID.auth._vaultInit = true;
-    }
-    return true;
-  }
-  if (!clientId) return false;
-  await new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-apple-auth]');
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", reject, { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
-    script.dataset.appleAuth = "true";
-    script.addEventListener("load", resolve, { once: true });
-    script.addEventListener("error", reject, { once: true });
-    document.head.append(script);
-  });
-  if (!globalThis.AppleID?.auth) return false;
-  globalThis.AppleID.auth.init({
-    clientId,
-    scope: "name email",
-    redirectURI: `${location.origin}/auth/apple`,
-    usePopup: true,
-  });
-  globalThis.AppleID.auth._vaultInit = true;
-  return true;
-}
-
 $("#add-apple")?.addEventListener("click", async () => {
   if ($("#account-note")) $("#account-note").textContent = "";
   try {
-    const clientId = authConfig.appleClientId;
-    if (!clientId || clientId === true) {
+    if (!authConfig.appleClientId) {
       throw new Error("Sign in with Apple isn't configured on this server yet.");
     }
-    const ok = await ensureAppleSdk(clientId);
-    if (!ok || !globalThis.AppleID?.auth) {
-      throw new Error("Sign in with Apple isn't available in this browser.");
-    }
-    const resp = await globalThis.AppleID.auth.signIn();
-    const idToken = resp?.authorization?.id_token;
-    if (!idToken) throw new Error("Apple did not return an identity token.");
-    const fullName = [resp?.user?.name?.firstName, resp?.user?.name?.lastName].filter(Boolean).join(" ").trim();
-    await signInWithApple(idToken, { name: fullName || undefined });
+    // signIn() must run in this turn of the click — no await before it (iOS Safari).
+    const resp = await applePopupSignIn();
+    const { idToken, name } = idTokenFromAppleResponse(resp);
+    await signInWithApple(idToken, { name });
     await loadMethods();
     if ($("#account-note")) $("#account-note").textContent = "Apple linked to this account.";
   } catch (error) {
-    if (!cancelled(error) && $("#account-note")) $("#account-note").textContent = error.message;
+    if (!cancelled(error) && $("#account-note")) $("#account-note").textContent = appleErrorMessage(error);
   }
 });
 

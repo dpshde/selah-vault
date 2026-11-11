@@ -257,13 +257,25 @@ export function createRelevance({
   }
 
   async function prepareItems(items) {
-    const prepared = [];
-    for (const item of items) {
-      const text = item.text ?? (await verseText.get(item.ref)).text;
-      const hash = await rangeHash(text);
-      hashes.set(item.id, hash);
-      prepared.push({ id: item.id, ref: item.ref, text });
+    // Bounded parallelism: missing BSB text used to be fetched one ref at a time,
+    // which made Related / topic search feel far slower than Jev itself. Cap the
+    // fan-out so the /yv proxy is not stampeded on a large library.
+    const PREPARE_CONCURRENCY = 6;
+    const prepared = new Array(items.length);
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        const item = items[i];
+        const text = item.text ?? (await verseText.get(item.ref)).text;
+        const hash = await rangeHash(text);
+        hashes.set(item.id, hash);
+        prepared[i] = { id: item.id, ref: item.ref, text };
+      }
     }
+    const n = Math.min(PREPARE_CONCURRENCY, items.length);
+    await Promise.all(Array.from({ length: n }, () => worker()));
     return prepared;
   }
 
