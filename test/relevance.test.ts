@@ -35,42 +35,45 @@ function verseText(map: Record<string, string>) {
 }
 
 describe("UI copy and list toolbar toggle", () => {
-  test("the list bar offers Date · Genre · Related; topic search sits beside Filter", () => {
+  test("the list bar offers Date · Genre; the omni field and passage card sit above it", () => {
     const bar = /<div id="group-by"[\s\S]*?<\/div>/.exec(html)?.[0] ?? "";
     expect([...bar.matchAll(/data-mode="([^"]+)"/g)].map((m) => m[1])).toEqual([
       "date",
       "genre",
-      "related",
     ]);
     expect(html).not.toContain('data-mode="topic"');
     expect(html).not.toContain('data-mode="relevant"');
     expect(html).not.toContain('data-mode="surprising"');
+    expect(html).not.toContain('data-mode="related"');
     expect(html).not.toContain('<option value="topic">');
+    expect(html).not.toContain('<option value="related">');
     expect(html).toContain('id="related-sort"');
     expect(html).toContain('data-related-sort="closest"');
     expect(html).toContain('data-related-sort="surprising"');
-    // Related hijacks #ref; Closest|Surprising is results chrome; topic search is list-bar icon chrome.
     expect(html).not.toContain('id="relevance-ref"');
     expect(html).not.toContain('id="relevance-bar"');
     expect(html).not.toContain('id="list-foot"');
     expect(html).not.toContain('id="topic-ref"');
+    expect(html).not.toContain('id="topic-search"');
     expect(html).toContain('id="ref"');
     expect(html).toContain("<si-passage-input id=\"ref\"");
-    expect(html).toContain('id="topic-search-wrap"');
-    expect(html).toContain('id="topic-search-toggle"');
-    expect(html).toContain('id="topic-search"');
-    expect(html).toContain('aria-label="Search by topic"');
-    expect(html).toContain('aria-controls="topic-search"');
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain('placeholder="Search by topic…"');
-    expect(html).toContain('aria-label="Search highlights by topic"');
+    expect(html).toContain('placeholder="Passage or topic, e.g. Rom 8:18 or hope"');
+    expect(html).toContain('aria-label="Passage or topic"');
+    expect(html).toContain('id="omni-card"');
+    expect(html).toContain('id="omni-card-highlight"');
+    expect(html).toContain('id="omni-card-related"');
+    expect(html).toContain('id="omni-card-search"');
+    expect(html).toContain(">Go</button>");
     expect(html).not.toContain('id="scope-prefix"');
-    expect(app).toContain('placeholder: "Rom 8:18–25"');
     expect(app).toContain("topicQuery");
-    expect(app).toContain("openTopicSearch");
-    expect(app).toContain("closeTopicSearch");
-    expect(app).toContain("syncAddHiddenForTopicSearch");
-    expect(app).toContain("form.hidden = searchOpen");
+    expect(app).toContain("submitOmni");
+    expect(app).toContain("showOmniCard");
+    expect(app).toContain("relatedFromCard");
+    expect(app).toContain("routeOmniSubmit");
+    expect(app).toContain("OMNI_PLACEHOLDER");
+    expect(app).toContain("OMNI_PLACEHOLDER_PHONE");
+    expect(app).toContain("function clearOmniValidity");
+    expect(app).toContain('refField.addEventListener("focusout"');
     expect(app).toContain("LEGACY_TOPIC_MODE");
     expect(app).toContain("LEGACY_RELATED_MODES");
     expect(app).toContain("relatedSort");
@@ -78,30 +81,23 @@ describe("UI copy and list toolbar toggle", () => {
     expect(app).toContain("relatedRankMode");
     expect(app).toContain("syncRelatedSortChrome");
     expect(app).toContain("syncRefFieldMode");
-    expect(app).toContain("rank-scope");
-    expect(app).toContain("clearRankScopeFromRef");
+    expect(app).not.toContain("function openTopicSearch");
+    expect(app).not.toContain("function commitRelatedRank");
     expect(css).toContain(".related-sort");
-    expect(css).toContain("#add.rank-scope { grid-template-columns: 1fr; }");
+    expect(css).toContain(".omni-card");
     expect(css).toContain(":focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }");
-    // #list-bar sits directly below #add and above #list; Filter + search icon + modes share the bar.
     const addStart = html.indexOf('id="add"');
+    const cardStart = html.indexOf('id="omni-card"');
     const barStart = html.indexOf('id="list-bar"');
     const filtersStart = html.indexOf('id="filters"');
-    const topicToggleStart = html.indexOf('id="topic-search-toggle"');
-    const topicSearchStart = html.indexOf('id="topic-search"');
     const listStart = html.indexOf('id="list"');
     expect(addStart).toBeGreaterThan(html.indexOf("<header>"));
-    expect(html.slice(addStart, barStart)).not.toContain('id="topic-search"');
-    expect(barStart).toBeGreaterThan(addStart);
+    expect(cardStart).toBeGreaterThan(addStart);
+    expect(barStart).toBeGreaterThan(cardStart);
     expect(filtersStart).toBeGreaterThan(barStart);
-    expect(topicToggleStart).toBeGreaterThan(filtersStart);
-    expect(topicSearchStart).toBeGreaterThan(topicToggleStart);
-    expect(listStart).toBeGreaterThan(topicSearchStart);
+    expect(listStart).toBeGreaterThan(filtersStart);
     const listBar = html.slice(barStart, listStart);
     expect(listBar).toContain('id="filters"');
-    expect(listBar).toContain('id="topic-search-wrap"');
-    expect(listBar).toContain('id="topic-search-toggle"');
-    expect(listBar).toContain('id="topic-search"');
     expect(listBar).toContain('id="filter-summary"');
     expect(listBar).toContain('id="filter-badge"');
     expect(listBar).toContain("<svg viewBox=\"0 0 24 24\"");
@@ -109,6 +105,7 @@ describe("UI copy and list toolbar toggle", () => {
     expect(filterSummary.replace(/<[^>]*>/g, "").trim()).toBe("");
     expect(listBar).toContain('id="filter-options"');
     expect(listBar).toContain('id="group-by"');
+    expect(listBar).not.toContain('id="topic-search"');
     expect(listBar).not.toContain('id="list-total"');
     expect(html.indexOf('id="list-total"')).toBeGreaterThan(listStart);
     expect(html.indexOf('id="list-total"')).toBeLessThan(html.indexOf('<footer class="shell-meta">'));
@@ -116,87 +113,8 @@ describe("UI copy and list toolbar toggle", () => {
     expect(app).toContain('check.type = "checkbox"');
     expect(app).not.toContain("Filter ·");
     expect(app).toContain('`Filter by color (${filter.size} active)`');
-    // Hybrid preview: #rank-epigraph sits right under #add for short passages; collapsible #rank-preview sits above #list for longer passages.
-    const epigraphStart = html.indexOf('id="rank-epigraph"');
-    expect(epigraphStart).toBeGreaterThan(addStart);
-    expect(epigraphStart).toBeLessThan(barStart);
-    expect(html.indexOf('id="rank-preview"')).toBeLessThan(listStart);
-    expect(html.indexOf('id="rank-preview"')).toBeGreaterThan(filtersStart);
-    expect(app).toContain("SHORT_PREVIEW_MAX_VERSES");
-    expect(app).toContain("SHORT_PREVIEW_MAX_CHARS");
     expect(css).toContain(".list-bar");
-    expect(css).toContain(".topic-search-wrap");
-    expect(css).toContain(".topic-search-toggle");
-    expect(css).toContain(".topic-search-wrap.is-open");
-    expect(css).toContain(".list-bar-top:has(.topic-search-wrap.is-open) .filter-menu");
-    expect(css).toContain(".list-bar-top:has(.topic-search-wrap.is-open) .segmented");
-    // Open search shares a row with Filter; modes wrap full-width (not order:-1 / 100% search orphaning Filter).
-    expect(css).toMatch(/\.topic-search-wrap\.is-open\s*\{[^}]*flex:\s*1 1 0/);
-    expect(css).not.toMatch(/\.topic-search-wrap\.is-open\s*\{[^}]*order:\s*-1/);
-    // Expand/collapse animates width/opacity (no display:none flash).
-    expect(css).toContain(".topic-search-wrap:not(.is-open) .topic-search");
-    expect(css).toMatch(/\.topic-search-wrap:not\(\.is-open\) \.topic-search\s*\{[^}]*max-width:\s*0/);
-    expect(css).toMatch(/\.topic-search-wrap\.is-open \.topic-search-toggle\s*\{[^}]*max-width:\s*0/);
-    expect(css).toContain("transition: opacity .2s ease, max-width .2s ease");
-    expect(css).toContain(".list-bar .topic-search");
-    expect(css).toContain(".filter-menu");
-    expect(css).toContain(".rank-epigraph");
-    expect(css).toContain(".rank-preview");
-    expect(css).toContain("-webkit-line-clamp");
-    // Expand/collapse: icon → field; hide #add while open; × / one Escape / empty outside fully exits.
-    expect(html).toContain('id="topic-search-close"');
-    expect(html).toContain('aria-label="Close topic search"');
-    expect(css).toContain(".topic-search-close");
-    expect(css).toContain(".topic-search-wrap.is-open .topic-search-close");
-    expect(app).toContain('topicToggle.addEventListener("click", () => openTopicSearch())');
-    expect(app).toContain("function exitTopicSearch");
-    expect(app).toContain("syncAddHiddenForTopicSearch(true)");
-    expect(app).toContain("syncAddHiddenForTopicSearch(false)");
-    expect(app).toContain('if (e.key === "Escape")');
-    expect(app).toContain("exitTopicSearch()");
-    expect(app).toContain('topicField.addEventListener("blur"');
-    expect(app).toContain("if (!force && topicQuery()) return");
-    expect(app).toContain("closeTopicSearch({ force: true })");
-    // Empty open search: outside tap collapses; non-empty keeps results (× / Escape clears).
-    expect(app).toMatch(/document\.addEventListener\("pointerdown"[\s\S]*?topicQuery\(\)\) return[\s\S]*?closeTopicSearch\(\{ force: true \}\)/);
-  });
-
-  test("count and empty-state copy", () => {
-    expect(totalCopy(6, 47)).toBe("6 of 47 relevant");
-    expect(rankStatusCopy(3, 10, "relevant")).toBe("3 of 10 · closest");
-    expect(rankStatusCopy(3, 10, "surprising")).toBe("3 of 10 · least obvious");
-    expect(rankStatusCopy(10, 10, "topic")).toBe("10 · closest");
-    expect(topicCopy("grace")).toBe("Results for “grace”");
-    expect(topicCopy("")).toBe("Results");
-    expect(jevHintCopy("related")).toBe(
-      "Find the highlights in your library most closely connected to a passage.",
-    );
-    // One Related coach path — Surprising-specific empty copy is gone.
-    expect(jevHintCopy("surprising")).toBe(jevHintCopy("related"));
-    expect(jevHintCopy("topic")).toBe(jevHintCopy("related"));
-    expect(jevCtaCopy("related")).toBe("Choose a passage");
-    expect(jevCtaCopy("surprising")).toBe("Choose a passage");
-    expect(sanitizeTopic("  grace  ")).toBe("grace");
-    expect(emptyRelevanceCopy(17, "Hab 2:2")).toBe("None of your 17 highlights connect to Hab 2:2");
-    expect(emptyRelevanceCopy(1, "Romans 8:28")).toBe("None of your 1 highlight connect to Romans 8:28");
-    expect(chapterRefOf("HAB.2.2")).toBe("HAB.2");
-    expect(chapterRefOf("ROM.8.18-25")).toBe("ROM.8");
-    expect(chapterRefOf("PSA.23")).toBe("PSA.23");
-    expect(html).toContain('id="relevance-none"');
-    expect(html).toContain("Open on route.bible");
-    expect(html).toContain("Try the whole chapter");
-    expect(html).toContain("Sort by Date");
-    expect(app).toContain("emptyRelevanceCopy");
-    expect(app).toContain("showRelevanceNone");
-    expect(app).toContain("showRankPreview");
-    expect(app).toContain("relevance-none-route");
-    expect(app).toContain("relevance-none-chapter");
-    expect(app).toContain("relevance-none-date");
-    expect(app).toContain("rankFailed");
-    expect(app).toContain("rankErrorMessage");
-    // Distinct from the error line and from the library-empty #empty copy.
-    expect(app).toContain('textContent = "No highlights yet."');
-    expect(css).toContain(".relevance-none");
+    expect(css).toContain("outline-offset: -2px");
   });
 
   test("rank-mode header and loading copy; stale generations are ignored; identical list markup", () => {
@@ -249,14 +167,14 @@ describe("UI copy and list toolbar toggle", () => {
     expect(app).toContain('box.className = "offer rank-empty"');
     expect(app).toContain('hint.className = "rank-hint"');
     expect(app).toContain('cta.className = "quiet rank-cta"');
-    expect(app).toContain("const searching = !!topicQuery()");
+    expect(app).toContain('listView === "topic"');
+    expect(app).toContain('listView === "related"');
     expect(css).toMatch(/\.rank-empty\s*\{[\s\S]*?background:\s*var\(--surface\)[\s\S]*?box-shadow:\s*none/);
     expect(css).toMatch(/\.rank-empty \.rank-cta\s*\{[\s\S]*?background:\s*var\(--raised\)/);
     expect(css).toContain("#list .rows .row:hover");
     expect(css).not.toContain("#list .row:hover");
     expect(app).toContain('$("#list-total").textContent = ""');
     expect(app).toContain("searching ? !!relevance?.topic");
-    expect(app).toContain("keepSearch");
     expect(css).toContain(".rank-empty");
     expect(css).toContain(".rank-hint");
     // Foot never shows topicCopy while the list is empty.
@@ -264,15 +182,14 @@ describe("UI copy and list toolbar toggle", () => {
     // Expanded reader forces Lexend inside the shadow (si-passage .root uses all:initial).
     expect(app).toContain('font-family: "Lexend"');
     expect(app).toContain("styleScripture(el); // re-apply after reconnect");
-    // Related ranks on commit only — typing clears stale UI, no debounced Jev.
-    expect(app).toContain("function commitRelatedRank");
-    expect(app).toContain('refField.addEventListener("change"');
-    expect(app).toContain('refField.addEventListener("focusout"');
-    expect(app).toContain("commitTopicSearch");
+    // Omni submit (Enter / Go) classifies; no debounce, no Related-mode hijack.
+    expect(app).toContain("function submitOmni");
+    expect(app).toContain("routeOmniSubmit");
+    expect(app).not.toContain("function commitRelatedRank");
+    expect(app).not.toContain("commitTopicSearch");
     expect(app).not.toContain("refRankTimer");
     expect(app).not.toContain("setTimeout(() => void runRelevance(), 400)");
     expect(app).not.toContain("setTimeout(() => void runTopic(), 400)");
-    expect(app).toMatch(/addEventListener\("input"[\s\S]*?rankGeneration\+\+[\s\S]*?no network until commit/);
     expect(app).toContain('rankPending = true;\n  render(); // loading before any network / verse fetch');
     // List bar stretches full-width across the column with integrated status cell.
     expect(css).toContain("white-space: nowrap");

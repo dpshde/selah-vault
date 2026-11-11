@@ -82,12 +82,29 @@
 
     <form id="add" autocomplete="off" novalidate>
       <button type="button" id="add-dot" class="pick" aria-haspopup="true" aria-label="Highlight color: Yellow"><span class="dot" data-color="yellow"></span></button>
-      <!-- Related hijacks #ref as the ranking scope. Topic search is a list-bar icon that expands. -->
-      <si-passage-input id="ref" placeholder="John 3:16" aria-label="Verse or passage"></si-passage-input>
+      <si-passage-input id="ref" placeholder="Passage or topic, e.g. Rom 8:18 or hope" aria-label="Passage or topic"></si-passage-input>
       <input type="hidden" name="color" value="yellow">
-      <button type="submit">Highlight</button>
+      <button type="submit">Go</button>
       <p class="error" role="alert"></p>
     </form>
+    <article id="omni-card" class="omni-card" hidden>
+      <header class="omni-card-head">
+        <h2 id="omni-card-title" class="omni-card-title"></h2>
+        <button type="button" id="omni-card-close" class="omni-card-close" aria-label="Close passage" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div id="omni-card-body" class="omni-card-body">
+        <div id="omni-card-passage" class="omni-card-passage"></div>
+      </div>
+      <p id="omni-card-instead" class="omni-card-instead" hidden>
+        <button type="button" id="omni-card-search" class="link"></button>
+      </p>
+      <div class="omni-card-actions">
+        <button type="button" id="omni-card-highlight" class="quiet">Highlight</button>
+        <button type="button" id="omni-card-related" class="quiet">Related</button>
+      </div>
+    </article>
     <p id="rank-epigraph" class="rank-epigraph" hidden></p>
 
     <div id="list-bar" class="list-bar" hidden>
@@ -96,20 +113,13 @@
           <summary id="filter-summary" aria-label="Filter by color" title="Filter by color"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg><span id="filter-badge" class="filter-badge" hidden></span></summary>
           <div id="filter-options" role="group" aria-label="Filter by color"></div>
         </details>
-        <div id="topic-search-wrap" class="topic-search-wrap">
-          <button type="button" id="topic-search-toggle" class="topic-search-toggle" aria-label="Search by topic" title="Search by topic" aria-expanded="false" aria-controls="topic-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg></button>
-          <input id="topic-search" class="topic-search" type="search" enterkeyhint="search" maxlength="200" placeholder="Search by topic…" aria-label="Search highlights by topic" autocomplete="off" tabindex="-1">
-          <button type="button" id="topic-search-close" class="topic-search-close" aria-label="Close topic search" title="Close search" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-        </div>
         <div id="group-by" class="segmented" role="group" aria-label="Sort highlights" hidden>
           <button type="button" data-mode="date" aria-pressed="true">Date</button>
           <button type="button" data-mode="genre" aria-pressed="false">Genre</button>
-          <button type="button" data-mode="related" aria-pressed="false">Related</button>
         </div>
         <select id="group-by-select" class="mode-select" aria-label="Sort highlights" hidden>
           <option value="date">Date</option>
           <option value="genre">Genre</option>
-          <option value="related">Related</option>
         </select>
       </div>
     </div>
