@@ -101,8 +101,8 @@
         <button type="button" id="omni-card-search" class="link"></button>
       </p>
       <div class="omni-card-actions">
-        <button type="button" id="omni-card-highlight" class="quiet">Highlight</button>
-        <button type="button" id="omni-card-related" class="quiet">Related</button>
+        <button type="button" id="omni-card-highlight" class="icon" aria-label="Highlight" title="Highlight"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 11-6 6v3h3l6-6"/><path d="M10.5 9.5 16 4l4 4-5.5 5.5"/><path d="M14 8 8 14"/></svg></button>
+        <button type="button" id="omni-card-related" class="icon" aria-label="Related" title="Related"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg></button>
       </div>
     </article>
     <p id="rank-epigraph" class="rank-epigraph" hidden></p>
@@ -113,6 +113,7 @@
           <summary id="filter-summary" aria-label="Filter by color" title="Filter by color"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg><span id="filter-badge" class="filter-badge" hidden></span></summary>
           <div id="filter-options" role="group" aria-label="Filter by color"></div>
         </details>
+        <button type="button" id="select-toggle" class="select-toggle" aria-label="Select highlights" title="Select" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="m14 17.5 2 2 4-4"/></svg></button>
         <div id="group-by" class="segmented" role="group" aria-label="Sort highlights" hidden>
           <button type="button" data-mode="date" aria-pressed="true">Date</button>
           <button type="button" data-mode="genre" aria-pressed="false">Genre</button>
@@ -121,6 +122,16 @@
           <option value="date">Date</option>
           <option value="genre">Genre</option>
         </select>
+      </div>
+      <!-- Multi-select: batch color + delete only. Shown while selecting; Done clears the set. -->
+      <div id="selection-bar" class="selection-bar" hidden>
+        <button type="button" id="selection-done" class="selection-done">Done</button>
+        <span id="selection-count" class="selection-count" aria-live="polite">0 selected</span>
+        <button type="button" id="selection-all" class="selection-all">Select all</button>
+        <div class="selection-actions">
+          <button type="button" id="selection-color" class="pick" aria-haspopup="true" aria-label="Change color of selected" disabled><span class="dot" data-color="yellow"></span></button>
+          <button type="button" id="selection-delete" class="icon trash" aria-label="Delete selected" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+        </div>
       </div>
     </div>
     <div id="relevance-none" class="offer relevance-none" hidden role="status">

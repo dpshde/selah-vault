@@ -2,7 +2,7 @@ import {
   COLORS, Library, now, palette, topColor, parseJsonl, serverTransport,
 } from "./sync.js";
 import { labelRef, compareRefs } from "./refs.js";
-import { editRun, highlightRecord, tombstone, groupRuns } from "./ranges.js";
+import { editRun, highlightRecord, tombstone, groupRuns, recolorRecords, tombstoneRecords } from "./ranges.js";
 import { readPassage } from "./passage.js";
 import { classifyOmni, routeOmniSubmit, searchInsteadLabel, versesToPassageId, OMNI_PLACEHOLDER, OMNI_PLACEHOLDER_PHONE, OMNI_ARIA } from "./omni.js";
 import { MODES, LEGACY_TOPIC_MODE, LEGACY_RELATED_MODES, groupList, startsOpen } from "./groups.js";
@@ -64,6 +64,12 @@ let colors = palette([]);
 /** Multi-select color filter ids (empty Set = show all). */
 let filter = new Set();
 let flashTimer = 0;
+/** Row multi-select: batch color + delete only (not tags/notes/export). */
+let selecting = false;
+/** Selected run refs in the current list (same keys as row()/groupRuns). */
+let selected = new Set();
+/** Visible runs for the latest render — select-all and batch actions use this set. */
+let visibleRuns = [];
 
 function saveFilters() {
   if (!library) return;
@@ -136,6 +142,9 @@ async function enter({ id, name: given = "Personal", online = true } = {}) {
   highlightStamp = new Map();
   relevance = null;
   rankOrder = [];
+  selecting = false;
+  selected = new Set();
+  visibleRuns = [];
   clearRelevanceInput();
   showName();
   library.onChange(render);
@@ -167,6 +176,7 @@ function showName() {
 async function lock() {
   library?.forget();
   library = null;
+  exitSelectMode({ render: false });
   signedInUser = null;
   localStorage.removeItem(SESSION);
   await signOutSession();
@@ -586,9 +596,10 @@ function render() {
       : "";
   // verseText.open is omitted: expand/collapse is local (wireTextToggle/showText). Including it
   // remounted the whole list on every open/close whenever another render ran.
-  const sig = JSON.stringify([shown, colors, groupBy, relatedSort, [...filter], verseText.key, editing, ranking && scopeKey, rankOrder, rankFailed, noneRelevant, !!rankPending, jevWaiting, relatedDrafting, topicDrafting, searching, rankPaint]);
+  const sig = JSON.stringify([shown, colors, groupBy, relatedSort, [...filter], verseText.key, editing, ranking && scopeKey, rankOrder, rankFailed, noneRelevant, !!rankPending, jevWaiting, relatedDrafting, topicDrafting, searching, rankPaint, selecting, [...selected]]);
   let showRelatedSort = false;
   if (!editing && sig !== listSig) {
+    visibleRuns = [];
     if (jevWaiting) {
       // Actionable empty scope CTA in the list area; foot status stays empty.
       $("#list-total").textContent = "";
@@ -638,6 +649,7 @@ function render() {
         // New final paint: expand the new top unless the person toggled a row this query.
         applyRankAutoExpand(ranked[0].ref);
         // Same group()/row() markup as Date and Genre — only the heading text differs.
+        visibleRuns = ranked;
         const rankedGroup = group({ id: "ranked", name: heading, runs: ranked });
         rankedGroup.classList.add("rank-enter");
         $("#list").replaceChildren(rankedGroup);
@@ -654,16 +666,24 @@ function render() {
       // Date/Genre, or a failed Jev/search call: Date/Genre grouping (failed stays in Date order).
       const mode = jevActive || searching ? "date" : groupBy;
       const groups = groupList(shown, mode, (r) => topColor(r, ids));
+      visibleRuns = groups.flatMap((g) => g.runs);
       const total = groups.reduce((n, g) => n + g.runs.length, 0);
       $("#list-total").textContent = `${total} ${total === 1 ? "highlight" : "highlights"}`;
       $("#list").replaceChildren(...groups.map(group));
       showRankPreview(null);
     }
+    // Drop selection that left the current filtered/ranked view.
+    if (selecting && selected.size) {
+      const visible = new Set(visibleRuns.map((r) => r.ref));
+      for (const ref of [...selected]) if (!visible.has(ref)) selected.delete(ref);
+    }
     syncRelatedSortChrome(showRelatedSort);
+    syncSelectChrome();
   } else if (!editing) {
     // Sig unchanged: still refresh Closest|Surprising pressed state if results are showing.
     const rankedVisible = ranking && !rankPending && rankOrder.length > 0 && !searching && jevActive;
     syncRelatedSortChrome(!!rankedVisible);
+    syncSelectChrome();
   }
   listSig = editing ? null : sig;
   if (!$("#colors").hidden) renderColors();
@@ -769,12 +789,15 @@ const bsbText = createBsbText();
 let highlightStamp = new Map();
 
 function renderGroupBy(any) {
-  $("#group-by").hidden = !any;
-  $("#group-by-select").hidden = !any;
+  $("#group-by").hidden = !any || selecting;
+  $("#group-by-select").hidden = !any || selecting;
   $("#group-by-select").value = groupBy;
   $("#list-bar").hidden = !any;
+  const toggle = $("#select-toggle");
+  if (toggle) toggle.hidden = !any;
   syncRefFieldMode();
   for (const b of document.querySelectorAll("#group-by button")) b.setAttribute("aria-pressed", String(b.dataset.mode === groupBy));
+  syncSelectChrome();
 }
 
 function selectMode(next) {
@@ -1224,7 +1247,172 @@ const ICONS = {
   chevronUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+  highlight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 11-6 6v3h3l6-6"/><path d="M10.5 9.5 16 4l4 4-5.5 5.5"/><path d="M14 8 8 14"/></svg>',
+  related: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>',
 };
+
+// ---- multi-select: batch color + delete only (reuses row putMany shapes via ranges.js)
+
+/** Records for the currently selected runs in the visible list. */
+function selectedRecords() {
+  return visibleRuns.filter((run) => selected.has(run.ref)).flatMap((run) => run.records);
+}
+
+function enterSelectMode() {
+  if (selecting) return;
+  if (editing) {
+    editing = null;
+    listSig = null;
+  }
+  selecting = true;
+  selected = new Set();
+  verseText.open = null;
+  closeOmniCard();
+  render();
+  $("#selection-done")?.focus();
+}
+
+function exitSelectMode({ render: shouldRender = true } = {}) {
+  if (!selecting && selected.size === 0) {
+    syncSelectChrome();
+    return;
+  }
+  selecting = false;
+  selected = new Set();
+  if (shouldRender && library) render();
+  else syncSelectChrome();
+}
+
+function toggleRunSelected(runRef) {
+  if (!selecting) return;
+  if (selected.has(runRef)) selected.delete(runRef);
+  else selected.add(runRef);
+  render();
+}
+
+function selectAllVisible() {
+  if (!selecting) return;
+  const allSelected = visibleRuns.length > 0 && visibleRuns.every((run) => selected.has(run.ref));
+  if (allSelected) selected = new Set();
+  else selected = new Set(visibleRuns.map((run) => run.ref));
+  render();
+}
+
+/**
+ * Shared color among selected runs. `null` when the selection is empty or mixed — the picker then
+ * presses nothing so any palette tap (including yellow) still recolors the set.
+ */
+function selectionColorId() {
+  const ids = colors.map((c) => c.id);
+  let shared = null;
+  for (const run of visibleRuns) {
+    if (!selected.has(run.ref)) continue;
+    const id = topColor(run.records[0], ids);
+    if (shared === null) shared = id;
+    else if (shared !== id) return null;
+  }
+  return shared;
+}
+
+/** Disarms the selection-bar trash when the selection empties (see armDelete wiring below). */
+let selectionDeleteCtl = null;
+
+function syncSelectChrome() {
+  const bar = $("#list-bar");
+  const selectionBar = $("#selection-bar");
+  const toggle = $("#select-toggle");
+  const count = $("#selection-count");
+  const allBtn = $("#selection-all");
+  const colorBtn = $("#selection-color");
+  const delBtn = $("#selection-delete");
+  if (bar) bar.dataset.selecting = selecting ? "true" : "false";
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(selecting));
+    toggle.title = selecting ? "Done selecting" : "Select";
+    toggle.setAttribute("aria-label", selecting ? "Done selecting" : "Select highlights");
+  }
+  if (selectionBar) selectionBar.hidden = !selecting;
+  const n = selected.size;
+  if (count) count.textContent = n === 0 ? "Select highlights" : `${n} selected`;
+  const allSelected = visibleRuns.length > 0 && visibleRuns.every((run) => selected.has(run.ref));
+  if (allBtn) {
+    allBtn.hidden = !selecting || visibleRuns.length === 0;
+    allBtn.textContent = allSelected ? "Clear" : "Select all";
+    allBtn.setAttribute("aria-label", allSelected ? "Clear selection" : "Select all in this list");
+  }
+  if (colorBtn) {
+    colorBtn.disabled = n === 0;
+    const swatch = colorBtn.querySelector(".dot");
+    if (swatch) paint(swatch, selectionColorId() ?? colors[0]?.id ?? "yellow");
+    colorBtn.setAttribute("aria-label", n === 0 ? "Change color of selected" : `Change color of ${n} selected`);
+  }
+  if (delBtn) {
+    if (n === 0) selectionDeleteCtl?.disarm();
+    delBtn.disabled = n === 0;
+    // Leave armed confirm labels alone until disarm (armDelete owns aria-label while armed).
+    if (!selectionDeleteCtl?.armed()) {
+      const label = n === 0 ? "Delete selected" : `Delete ${n} selected`;
+      delBtn.setAttribute("aria-label", label);
+      delBtn.title = label;
+    }
+  }
+  if (selecting) {
+    const sort = $("#related-sort");
+    if (sort) sort.hidden = true;
+  }
+}
+
+function batchRecolorSelected(colorId) {
+  const records = selectedRecords();
+  if (!records.length) return;
+  const t = now();
+  library.putMany(recolorRecords(records, colorId, t));
+}
+
+async function batchDeleteSelected() {
+  const runs = visibleRuns.filter((run) => selected.has(run.ref));
+  const records = runs.flatMap((run) => run.records);
+  if (!records.length) return;
+  const n = runs.length;
+  await library.putMany(tombstoneRecords(records));
+  const prior = records;
+  exitSelectMode({ render: false });
+  flash(`Deleted ${n} ${n === 1 ? "highlight" : "highlights"}.`, {
+    label: "Undo",
+    run: () => library.putMany(prior),
+    ms: 5000,
+  });
+  render();
+}
+
+{
+  const toggle = $("#select-toggle");
+  const done = $("#selection-done");
+  const allBtn = $("#selection-all");
+  const colorBtn = $("#selection-color");
+  const delBtn = $("#selection-delete");
+  toggle?.addEventListener("click", () => (selecting ? exitSelectMode() : enterSelectMode()));
+  done?.addEventListener("click", () => exitSelectMode());
+  allBtn?.addEventListener("click", () => selectAllVisible());
+  colorBtn?.addEventListener("click", () => {
+    if (!selected.size) return;
+    // Empty current when mixed/empty so every palette color (incl. yellow) can fire pick.
+    openColorPicker(colorBtn, selectionColorId() ?? "", (id) => batchRecolorSelected(id));
+  });
+  if (delBtn) {
+    selectionDeleteCtl = armDelete(delBtn, {
+      label: "selected highlights",
+      idleHTML: ICONS.trash,
+      onConfirm: () => batchDeleteSelected(),
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !selecting) return;
+    if ($("#color-pop")?.matches(":popover-open")) return;
+    e.preventDefault();
+    exitSelectMode();
+  });
+}
 
 function iconButton(tag, icon, label) {
   const el = document.createElement(tag);
@@ -1240,6 +1428,39 @@ function iconButton(tag, icon, label) {
 function row({ ref: runRef, records }) {
   const ids = colors.map((c) => c.id);
   const li = document.createElement("li");
+  const isSelected = selecting && selected.has(runRef);
+
+  const line = document.createElement("div");
+  line.className = "row";
+  if (selecting) line.dataset.selecting = "1";
+  if (isSelected) line.dataset.selected = "1";
+
+  // Selection mode: check control + tap-to-toggle; hide per-row edit/globe/delete to keep phones clear.
+  if (selecting) {
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "row-check";
+    check.setAttribute("aria-pressed", String(isSelected));
+    check.setAttribute("aria-label", `${isSelected ? "Deselect" : "Select"} ${labelRef(runRef)}`);
+    check.innerHTML = isSelected ? ICONS.check : "";
+    check.addEventListener("click", () => toggleRunSelected(runRef));
+
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "row-link";
+    link.setAttribute("aria-label", `${isSelected ? "Deselect" : "Select"} ${labelRef(runRef)}`);
+    link.addEventListener("click", () => toggleRunSelected(runRef));
+    const ref = document.createElement("span");
+    ref.className = "ref";
+    ref.textContent = labelRef(runRef);
+    const quote = document.createElement("span");
+    quote.className = "quote";
+    quote.textContent = records.flatMap((r) => r.highlights.map((h) => h.quote)).filter(Boolean).join(" … ");
+    link.append(ref, quote);
+    line.append(check, link);
+    li.append(line);
+    return li;
+  }
 
   const dot = document.createElement("button");
   dot.type = "button";
@@ -1250,7 +1471,7 @@ function row({ ref: runRef, records }) {
   dot.addEventListener("click", () =>
     openColorPicker(dot, topColor(records[0], ids), (id) => {
       const t = now();
-      library.putMany(records.map((r) => ({ ...r, highlights: r.highlights.map((h) => ({ ...h, color: id, edited: t })) })));
+      library.putMany(recolorRecords(records, id, t));
     }),
   );
 
@@ -1276,9 +1497,6 @@ function row({ ref: runRef, records }) {
   quote.textContent = records.flatMap((r) => r.highlights.map((h) => h.quote)).filter(Boolean).join(" … ");
   link.append(ref, quote);
 
-  const line = document.createElement("div");
-  line.className = "row";
-
   const edit = iconButton("button", "edit", `Edit ${labelRef(runRef)}`);
   edit.classList.add("edit");
   edit.addEventListener("click", () => editRow(li, line, { ref: runRef, records }));
@@ -1291,7 +1509,7 @@ function row({ ref: runRef, records }) {
     label: labelRef(runRef),
     idleHTML: ICONS.trash,
     onConfirm: async () => {
-      await library.putMany(records.map((r) => tombstone(r.ref)));
+      await library.putMany(tombstoneRecords(records));
       flash(`Deleted ${labelRef(runRef)}.`, { label: "Undo", run: () => library.putMany(records), ms: 5000 });
     },
   });
