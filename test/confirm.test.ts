@@ -90,6 +90,7 @@ test("highlight rows use it, offer a 5s Undo, and touch screens get 44px, separa
   const read = (p: string) => readFileSync(new URL(`../public/${p}`, import.meta.url), "utf8");
   const app = read("app.js"), css = read("style.css");
   expect(app).toContain("armDelete(del, {");
+  expect(app).toContain("tombstoneRecords(records)");
   expect(app).toMatch(/flash\(`Deleted \$\{labelRef\(runRef\)\}\.`, \{ label: "Undo", run: \(\) => library\.putMany\(records\), ms: 5000 \}\)/);
   expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 40rem\) \{[\s\S]*?\.actions \.icon \{ min-width: 2\.75rem; height: 2\.75rem;[\s\S]*?\.actions \.icon\.trash \{ margin-left: \.75rem; \}/);
 });

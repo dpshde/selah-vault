@@ -169,6 +169,25 @@ export function tombstone(ref) {
   return { kind: "highlight", ref, deleted: true };
 }
 
+/**
+ * Recolor every highlight part on each record — same write shape as a row's color picker.
+ * Batch color change is one putMany of these records.
+ */
+export function recolorRecords(records, color, t) {
+  return records.map((r) => ({
+    ...r,
+    highlights: (r.highlights ?? []).map((h) => ({ ...h, color, edited: t })),
+  }));
+}
+
+/**
+ * Tombstones for each record's ref — same write shape as a row's delete.
+ * Batch delete is one putMany of these; Undo restores the prior live records.
+ */
+export function tombstoneRecords(records) {
+  return records.map((r) => tombstone(r.ref));
+}
+
 /** The version a device writes: `record` stamped one second past `prevUpdated` when its clock is behind. */
 export function stamp(record, prevUpdated, t) {
   return { ...record, updated: Math.max(t, (prevUpdated ?? 0) + 1) };

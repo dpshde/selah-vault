@@ -2,7 +2,7 @@ import {
   COLORS, Library, now, palette, topColor, parseJsonl, serverTransport,
 } from "./sync.js";
 import { labelRef, compareRefs } from "./refs.js";
-import { editRun, highlightRecord, tombstone, groupRuns } from "./ranges.js";
+import { editRun, highlightRecord, tombstone, groupRuns, recolorRecords, tombstoneRecords } from "./ranges.js";
 import { readPassage } from "./passage.js";
 import { classifyOmni, routeOmniSubmit, searchInsteadLabel, versesToPassageId, OMNI_PLACEHOLDER, OMNI_PLACEHOLDER_PHONE, OMNI_ARIA } from "./omni.js";
 import { MODES, LEGACY_TOPIC_MODE, LEGACY_RELATED_MODES, groupList, startsOpen } from "./groups.js";
@@ -64,6 +64,12 @@ let colors = palette([]);
 /** Multi-select color filter ids (empty Set = show all). */
 let filter = new Set();
 let flashTimer = 0;
+/** Row multi-select: batch color + delete only (not tags/notes/export). */
+let selecting = false;
+/** Selected run refs in the current list (same keys as row()/groupRuns). */
+let selected = new Set();
+/** Visible runs for the latest render — select-all and batch actions use this set. */
+let visibleRuns = [];
 
 function saveFilters() {
   if (!library) return;
@@ -78,7 +84,7 @@ const SIGNED_IN = new Set(["main", "colors", "backup", "sync", "account"]);
 
 function show(id) {
   for (const section of document.querySelectorAll("main > section")) section.hidden = section.id !== id;
-  const label = SIGNED_IN.has(id) ? "Signed in" : "Signed out";
+  const label = SIGNED_IN.has(id) ? (signedInUser ? "Signed in" : "Local only") : "Signed out";
   const status = $("#auth-status");
   if (status) {
     status.textContent = label;
@@ -136,6 +142,9 @@ async function enter({ id, name: given = "Personal", online = true } = {}) {
   highlightStamp = new Map();
   relevance = null;
   rankOrder = [];
+  selecting = false;
+  selected = new Set();
+  visibleRuns = [];
   clearRelevanceInput();
   showName();
   library.onChange(render);
@@ -167,9 +176,24 @@ function showName() {
 async function lock() {
   library?.forget();
   library = null;
+  exitSelectMode({ render: false });
   signedInUser = null;
   localStorage.removeItem(SESSION);
   await signOutSession();
+  $("#menu").open = false;
+  $("#passkey-offer").hidden = true;
+  document.querySelectorAll("form").forEach((f) => f.reset());
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  show("start");
+}
+
+function openSignIn() {
+  library?.forget();
+  library = null;
+  exitSelectMode({ render: false });
+  signedInUser = null;
+  localStorage.removeItem(SESSION);
   $("#menu").open = false;
   $("#passkey-offer").hidden = true;
   document.querySelectorAll("form").forEach((f) => f.reset());
@@ -278,6 +302,7 @@ function renderAddColor() {
   paint(addDot.querySelector(".dot"), c.id);
   addDot.setAttribute("aria-label", `Highlight color: ${colorName(c)}`);
   addDot.title = `Highlight color: ${colorName(c)}`;
+  syncOmniCardActions();
 }
 
 addDot.addEventListener("click", () =>
@@ -307,8 +332,9 @@ const refField = $("#ref");
 /** What's in a passage field: its passage id when it read one, else the typed text, which readPassage reads
  * more loosely (the field won't take passages across chapters, like Genesis 1–2, but Selah Vault does). */
 function refText(field = refField) {
-  const typed = field.shadowRoot?.querySelector("input")?.value ?? "";
-  return field.value && field.validity.valid ? field.value : typed;
+  const input = field.shadowRoot?.querySelector("input") ?? field.input;
+  if (input) return input.value ?? "";
+  return field.value && field.validity?.valid ? field.value : "";
 }
 /** Whether the field's suggestion list is showing (Enter and Escape act on it first). */
 const suggesting = (field) => field.shadowRoot?.querySelector("[role=listbox]")?.hidden === false;
@@ -346,6 +372,61 @@ function syncRefFieldMode() {
   form.querySelector('button[type="submit"]').hidden = false;
 }
 
+function syncOmniDotState() {
+  const raw = String(refText(refField)).trim();
+  const isTopic = Boolean(raw) && classifyOmni(raw).kind === "topic";
+  if (isTopic) {
+    addDot.dataset.topic = "1";
+    if (!refField.suggestions?.length) refField.close?.();
+  } else {
+    delete addDot.dataset.topic;
+  }
+}
+
+function syncOmniCardActions() {
+  const btn = $("#omni-card-highlight");
+  const relBtn = $("#omni-card-related");
+  if (btn) {
+    const dot = $("#omni-card-dot");
+    const label = btn.querySelector(".omni-action-label");
+    const chosenId = addColor?.value || colors[0]?.id || "yellow";
+    const chosen = colors.find((x) => x.id === chosenId) ?? colors[0];
+    if (dot && chosen) paint(dot, chosen.id);
+    const verses = omniCardState?.verses ?? [];
+    const ids = colors.map((c) => c.id);
+    const records = library && verses.length ? verses.map((v) => library.find("highlight", v)) : [];
+    const sameColor = records.length > 0 && records.every((r) => r && topColor(r, ids) === chosen?.id);
+    const svg = btn.querySelector("svg");
+    if (sameColor) {
+      btn.dataset.highlighted = "1";
+      btn.setAttribute("aria-pressed", "true");
+      if (label) label.textContent = "Highlighted";
+      if (svg) svg.outerHTML = ICONS.check;
+      const desc = `Highlighted in ${colorName(chosen)}`;
+      btn.setAttribute("aria-label", desc);
+      btn.title = desc;
+    } else {
+      delete btn.dataset.highlighted;
+      btn.setAttribute("aria-pressed", "false");
+      if (label) label.textContent = "Highlight";
+      if (svg) svg.outerHTML = ICONS.highlight;
+      btn.setAttribute("aria-label", "Highlight");
+      btn.title = chosen ? `Highlight in ${colorName(chosen)}` : "Highlight";
+    }
+  }
+  if (relBtn) {
+    const currentPassage = versesToPassageId(omniCardState?.verses ?? []);
+    const isRelatedActive = listView === "related" && Boolean(currentPassage) && relevance?.passage?.ref === currentPassage;
+    if (isRelatedActive) {
+      relBtn.dataset.active = "1";
+      relBtn.setAttribute("aria-pressed", "true");
+    } else {
+      delete relBtn.dataset.active;
+      relBtn.setAttribute("aria-pressed", "false");
+    }
+  }
+}
+
 function closeOmniCard() {
   omniCardState = null;
   const card = $("#omni-card");
@@ -355,6 +436,7 @@ function closeOmniCard() {
   $("#omni-card-passage")?.replaceChildren();
   const instead = $("#omni-card-instead");
   if (instead) instead.hidden = true;
+  syncOmniCardActions();
 }
 
 function showOmniCard(classified) {
@@ -398,6 +480,7 @@ function showOmniCard(classified) {
     el.addEventListener("scripture-error", reveal, { once: true });
     host.append(el);
   }
+  syncOmniCardActions();
   card.hidden = false;
 }
 
@@ -412,6 +495,8 @@ function submitOmni() {
   if (routed.action === "noop") return;
   errorIn(form, "");
   clearOmniValidity();
+  refField.close?.();
+  syncOmniDotState();
   if (routed.action === "topic") {
     closeOmniCard();
     omniTopic = sanitizeTopic(routed.classified.query);
@@ -436,13 +521,25 @@ function submitOmni() {
 async function highlightFromCard() {
   if (!omniCardState?.verses?.length) return;
   const form = $("#add");
-  await highlight(omniCardState.verses, new FormData(form).get("color"));
+  const colorId = String(new FormData(form).get("color") || colors[0]?.id || "yellow");
+  const chosen = colors.find((x) => x.id === colorId) ?? colors[0];
+  const ids = colors.map((c) => c.id);
+  const records = omniCardState.verses.map((v) => library.find("highlight", v));
+  const alreadySame = records.length > 0 && records.every((r) => r && topColor(r, ids) === chosen.id);
+  if (alreadySame) {
+    await library.putMany(tombstoneRecords(records));
+    flash(`Removed ${omniCardState.label}.`, { label: "Undo", run: () => library.putMany(records), ms: 5000 });
+    return;
+  }
+  const undo = await highlight(omniCardState.verses, chosen.id);
+  flash(`Saved ${omniCardState.label} in ${colorName(chosen)}.`, { label: "Undo", run: undo, ms: 5000 });
 }
 
 function relatedFromCard() {
   if (!omniCardState?.verses?.length) return;
   omniTopic = "";
   listView = "related";
+  syncOmniCardActions();
   void runRelevance();
 }
 
@@ -455,6 +552,7 @@ function searchInsteadFromCard() {
   const input = refField.shadowRoot?.querySelector("input") ?? refField.input;
   if (input && omniTopic) input.value = omniTopic;
   clearOmniValidity();
+  syncOmniDotState();
   void runTopic();
 }
 
@@ -470,6 +568,7 @@ $("#add").addEventListener("submit", (e) => {
   e.preventDefault();
   submitOmni();
 });
+refField.addEventListener("focusin", () => syncOmniDotState());
 refField.addEventListener("focusout", () => clearOmniValidity());
 addEventListener("resize", () => {
   if (refField.getAttribute("placeholder") !== omniPlaceholder()) syncRefFieldMode();
@@ -586,9 +685,13 @@ function render() {
       : "";
   // verseText.open is omitted: expand/collapse is local (wireTextToggle/showText). Including it
   // remounted the whole list on every open/close whenever another render ran.
-  const sig = JSON.stringify([shown, colors, groupBy, relatedSort, [...filter], verseText.key, editing, ranking && scopeKey, rankOrder, rankFailed, noneRelevant, !!rankPending, jevWaiting, relatedDrafting, topicDrafting, searching, rankPaint]);
+  const sig = JSON.stringify([shown, colors, groupBy, relatedSort, [...filter], verseText.key, editing, ranking && scopeKey, rankOrder, rankFailed, noneRelevant, !!rankPending, jevWaiting, relatedDrafting, topicDrafting, searching, rankPaint, selecting, [...selected]]);
   let showRelatedSort = false;
   if (!editing && sig !== listSig) {
+    const listEl = $("#list");
+    if (relatedDrafting || topicDrafting) listEl.dataset.drafting = "1";
+    else delete listEl.dataset.drafting;
+    visibleRuns = [];
     if (jevWaiting) {
       // Actionable empty scope CTA in the list area; foot status stays empty.
       $("#list-total").textContent = "";
@@ -614,11 +717,14 @@ function render() {
       showRankPreview(null);
       $("#empty").hidden = true;
     } else if (relatedDrafting || topicDrafting) {
-      // Typing before commit: clear stale ranked UI without Ranking… or the empty CTA.
-      $("#list-total").textContent = "";
-      $("#list").replaceChildren();
+      // Typing before commit: keep current rows visible (dimmed via data-drafting) instead of blanking #list.
+      const groups = groupList(shown, groupBy, (r) => topColor(r, ids));
+      visibleRuns = groups.flatMap((g) => g.runs);
+      const total = groups.reduce((n, g) => n + g.runs.length, 0);
+      $("#list-total").textContent = `${total} ${total === 1 ? "highlight" : "highlights"}`;
+      $("#list").replaceChildren(...groups.map(group));
       showRankPreview(null);
-      $("#empty").hidden = true;
+      $("#empty").hidden = rows.length > 0;
     } else if (ranking) {
       const runs = groupRuns(shown, (r) => topColor(r, ids));
       const byRef = new Map(runs.map((run) => [run.ref, run]));
@@ -638,6 +744,7 @@ function render() {
         // New final paint: expand the new top unless the person toggled a row this query.
         applyRankAutoExpand(ranked[0].ref);
         // Same group()/row() markup as Date and Genre — only the heading text differs.
+        visibleRuns = ranked;
         const rankedGroup = group({ id: "ranked", name: heading, runs: ranked });
         rankedGroup.classList.add("rank-enter");
         $("#list").replaceChildren(rankedGroup);
@@ -654,18 +761,27 @@ function render() {
       // Date/Genre, or a failed Jev/search call: Date/Genre grouping (failed stays in Date order).
       const mode = jevActive || searching ? "date" : groupBy;
       const groups = groupList(shown, mode, (r) => topColor(r, ids));
+      visibleRuns = groups.flatMap((g) => g.runs);
       const total = groups.reduce((n, g) => n + g.runs.length, 0);
       $("#list-total").textContent = `${total} ${total === 1 ? "highlight" : "highlights"}`;
       $("#list").replaceChildren(...groups.map(group));
       showRankPreview(null);
     }
+    // Drop selection that left the current filtered/ranked view.
+    if (selecting && selected.size) {
+      const visible = new Set(visibleRuns.map((r) => r.ref));
+      for (const ref of [...selected]) if (!visible.has(ref)) selected.delete(ref);
+    }
     syncRelatedSortChrome(showRelatedSort);
+    syncSelectChrome();
   } else if (!editing) {
     // Sig unchanged: still refresh Closest|Surprising pressed state if results are showing.
     const rankedVisible = ranking && !rankPending && rankOrder.length > 0 && !searching && jevActive;
     syncRelatedSortChrome(!!rankedVisible);
+    syncSelectChrome();
   }
   listSig = editing ? null : sig;
+  syncOmniCardActions();
   if (!$("#colors").hidden) renderColors();
   scheduleListScrollFade();
 }
@@ -695,7 +811,7 @@ function syncListScrollFade() {
     const sampleY = rect.top + 4;
     const sampleX = rect.left + Math.min(24, Math.max(8, rect.width / 2));
     const hit = document.elementFromPoint(sampleX, sampleY);
-    if (hit?.closest?.("#list .group > summary")) list.dataset.fadeTop = "accent";
+    if (hit?.closest?.("#list .group > summary")) list.dataset.fadeTop = "raised";
     else delete list.dataset.fadeTop;
   } else {
     delete list.dataset.fadeTop;
@@ -759,6 +875,21 @@ function readRelatedSort() {
   return localStorage.getItem(RELATED_SORT) === "surprising" ? "surprising" : "closest";
 }
 
+/** Map Closest|Surprising chrome to the rankVerdicts mode key (relevant = closest-first). */
+function relatedRankMode() {
+  return relatedSort === "surprising" ? "surprising" : "relevant";
+}
+
+/** Show Closest|Surprising only once Related has a non-empty ranked list (hide while empty/loading/search). */
+function syncRelatedSortChrome(show) {
+  const bar = $("#related-sort");
+  if (!bar) return;
+  bar.hidden = !show;
+  for (const b of bar.querySelectorAll("[data-related-sort]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.relatedSort === relatedSort));
+  }
+}
+
 let groupBy = readGroupBy();
 /** Related results order: closest (default) or surprising — not a list mode. */
 let relatedSort = readRelatedSort();
@@ -769,12 +900,18 @@ const bsbText = createBsbText();
 let highlightStamp = new Map();
 
 function renderGroupBy(any) {
-  $("#group-by").hidden = !any;
-  $("#group-by-select").hidden = !any;
+  $("#group-by").hidden = !any || selecting;
+  $("#group-by-select").hidden = !any || selecting;
   $("#group-by-select").value = groupBy;
   $("#list-bar").hidden = !any;
+  const toggle = $("#select-toggle");
+  if (toggle) toggle.hidden = !any;
   syncRefFieldMode();
-  for (const b of document.querySelectorAll("#group-by button")) b.setAttribute("aria-pressed", String(b.dataset.mode === groupBy));
+  const inBrowse = listView === "browse";
+  for (const b of document.querySelectorAll("#group-by button")) {
+    b.setAttribute("aria-pressed", String(inBrowse && b.dataset.mode === groupBy));
+  }
+  syncSelectChrome();
 }
 
 function selectMode(next) {
@@ -839,6 +976,18 @@ function clearRelevanceInput() {
   verseText.open = null;
   showRelevanceNone(null);
   showRankPreview(null);
+  syncOmniDotState();
+}
+
+function exitRankedView() {
+  clearRelevanceInput();
+  const input = refField.shadowRoot?.querySelector("input") ?? refField.input;
+  if (input) input.value = "";
+  refField.value = "";
+  clearOmniValidity();
+  syncOmniDotState();
+  renderGroupBy(!!$("#list-bar") && !$("#list-bar").hidden);
+  render();
 }
 
 /**
@@ -1118,6 +1267,7 @@ async function reorderRelevance() {
 refField.addEventListener("input", () => {
   const form = $("#add");
   if (!String(refText(refField)).trim()) errorIn(form, "");
+  syncOmniDotState();
 });
 
 /** Skeleton rows while Related/topic waits on Jev after commit — matches list row rhythm. */
@@ -1141,7 +1291,7 @@ function rankSkeleton(count = 4) {
   return wrap;
 }
 
-/** One group: its name as the summary (the whole header toggles it), then its rows. */
+/** One group: its name and count as the summary (the whole header toggles it), then its rows. */
 function group({ id, name, runs }) {
   const key = `${groupBy}:${id}`;
   const details = document.createElement("details");
@@ -1153,7 +1303,23 @@ function group({ id, name, runs }) {
   const title = document.createElement("span");
   title.className = "group-name";
   title.textContent = name;
-  summary.append(title);
+  const count = document.createElement("span");
+  count.className = "group-count";
+  count.textContent = String(runs.length);
+  summary.append(title, count);
+  if (id === "ranked") {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "group-clear";
+    clear.setAttribute("aria-label", "Clear results and show all highlights");
+    clear.innerHTML = `${ICONS.close}<span>Clear</span>`;
+    clear.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      exitRankedView();
+    });
+    summary.append(clear);
+  }
   const list = document.createElement("ul");
   list.className = "rows";
   list.append(...runs.map(row));
@@ -1216,7 +1382,7 @@ const ICONS = {
   edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></svg>',
   filter: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
-  globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
+  globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
   statusOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>',
@@ -1224,7 +1390,172 @@ const ICONS = {
   chevronUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+  highlight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 11-6 6v3h3l6-6"/><path d="M10.5 9.5 16 4l4 4-5.5 5.5"/><path d="M14 8 8 14"/></svg>',
+  related: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>',
 };
+
+// ---- multi-select: batch color + delete only (reuses row putMany shapes via ranges.js)
+
+/** Records for the currently selected runs in the visible list. */
+function selectedRecords() {
+  return visibleRuns.filter((run) => selected.has(run.ref)).flatMap((run) => run.records);
+}
+
+function enterSelectMode() {
+  if (selecting) return;
+  if (editing) {
+    editing = null;
+    listSig = null;
+  }
+  selecting = true;
+  selected = new Set();
+  verseText.open = null;
+  closeOmniCard();
+  render();
+  $("#selection-done")?.focus();
+}
+
+function exitSelectMode({ render: shouldRender = true } = {}) {
+  if (!selecting && selected.size === 0) {
+    syncSelectChrome();
+    return;
+  }
+  selecting = false;
+  selected = new Set();
+  if (shouldRender && library) render();
+  else syncSelectChrome();
+}
+
+function toggleRunSelected(runRef) {
+  if (!selecting) return;
+  if (selected.has(runRef)) selected.delete(runRef);
+  else selected.add(runRef);
+  render();
+}
+
+function selectAllVisible() {
+  if (!selecting) return;
+  const allSelected = visibleRuns.length > 0 && visibleRuns.every((run) => selected.has(run.ref));
+  if (allSelected) selected = new Set();
+  else selected = new Set(visibleRuns.map((run) => run.ref));
+  render();
+}
+
+/**
+ * Shared color among selected runs. `null` when the selection is empty or mixed — the picker then
+ * presses nothing so any palette tap (including yellow) still recolors the set.
+ */
+function selectionColorId() {
+  const ids = colors.map((c) => c.id);
+  let shared = null;
+  for (const run of visibleRuns) {
+    if (!selected.has(run.ref)) continue;
+    const id = topColor(run.records[0], ids);
+    if (shared === null) shared = id;
+    else if (shared !== id) return null;
+  }
+  return shared;
+}
+
+/** Disarms the selection-bar trash when the selection empties (see armDelete wiring below). */
+let selectionDeleteCtl = null;
+
+function syncSelectChrome() {
+  const bar = $("#list-bar");
+  const selectionBar = $("#selection-bar");
+  const toggle = $("#select-toggle");
+  const count = $("#selection-count");
+  const allBtn = $("#selection-all");
+  const colorBtn = $("#selection-color");
+  const delBtn = $("#selection-delete");
+  if (bar) bar.dataset.selecting = selecting ? "true" : "false";
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(selecting));
+    toggle.title = selecting ? "Done selecting" : "Select";
+    toggle.setAttribute("aria-label", selecting ? "Done selecting" : "Select highlights");
+  }
+  if (selectionBar) selectionBar.hidden = !selecting;
+  const n = selected.size;
+  if (count) count.textContent = n === 0 ? "Select highlights" : `${n} selected`;
+  const allSelected = visibleRuns.length > 0 && visibleRuns.every((run) => selected.has(run.ref));
+  if (allBtn) {
+    allBtn.hidden = !selecting || visibleRuns.length === 0;
+    allBtn.textContent = allSelected ? "Clear" : "Select all";
+    allBtn.setAttribute("aria-label", allSelected ? "Clear selection" : "Select all in this list");
+  }
+  if (colorBtn) {
+    colorBtn.disabled = n === 0;
+    const swatch = colorBtn.querySelector(".dot");
+    if (swatch) paint(swatch, selectionColorId() ?? colors[0]?.id ?? "yellow");
+    colorBtn.setAttribute("aria-label", n === 0 ? "Change color of selected" : `Change color of ${n} selected`);
+  }
+  if (delBtn) {
+    if (n === 0) selectionDeleteCtl?.disarm();
+    delBtn.disabled = n === 0;
+    // Leave armed confirm labels alone until disarm (armDelete owns aria-label while armed).
+    if (!selectionDeleteCtl?.armed()) {
+      const label = n === 0 ? "Delete selected" : `Delete ${n} selected`;
+      delBtn.setAttribute("aria-label", label);
+      delBtn.title = label;
+    }
+  }
+  if (selecting) {
+    const sort = $("#related-sort");
+    if (sort) sort.hidden = true;
+  }
+}
+
+function batchRecolorSelected(colorId) {
+  const records = selectedRecords();
+  if (!records.length) return;
+  const t = now();
+  library.putMany(recolorRecords(records, colorId, t));
+}
+
+async function batchDeleteSelected() {
+  const runs = visibleRuns.filter((run) => selected.has(run.ref));
+  const records = runs.flatMap((run) => run.records);
+  if (!records.length) return;
+  const n = runs.length;
+  await library.putMany(tombstoneRecords(records));
+  const prior = records;
+  exitSelectMode({ render: false });
+  flash(`Deleted ${n} ${n === 1 ? "highlight" : "highlights"}.`, {
+    label: "Undo",
+    run: () => library.putMany(prior),
+    ms: 5000,
+  });
+  render();
+}
+
+{
+  const toggle = $("#select-toggle");
+  const done = $("#selection-done");
+  const allBtn = $("#selection-all");
+  const colorBtn = $("#selection-color");
+  const delBtn = $("#selection-delete");
+  toggle?.addEventListener("click", () => (selecting ? exitSelectMode() : enterSelectMode()));
+  done?.addEventListener("click", () => exitSelectMode());
+  allBtn?.addEventListener("click", () => selectAllVisible());
+  colorBtn?.addEventListener("click", () => {
+    if (!selected.size) return;
+    // Empty current when mixed/empty so every palette color (incl. yellow) can fire pick.
+    openColorPicker(colorBtn, selectionColorId() ?? "", (id) => batchRecolorSelected(id));
+  });
+  if (delBtn) {
+    selectionDeleteCtl = armDelete(delBtn, {
+      label: "selected highlights",
+      idleHTML: ICONS.trash,
+      onConfirm: () => batchDeleteSelected(),
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !selecting) return;
+    if ($("#color-pop")?.matches(":popover-open")) return;
+    e.preventDefault();
+    exitSelectMode();
+  });
+}
 
 function iconButton(tag, icon, label) {
   const el = document.createElement(tag);
@@ -1240,17 +1571,53 @@ function iconButton(tag, icon, label) {
 function row({ ref: runRef, records }) {
   const ids = colors.map((c) => c.id);
   const li = document.createElement("li");
+  const isSelected = selecting && selected.has(runRef);
 
+  const line = document.createElement("div");
+  line.className = "row";
+  if (selecting) line.dataset.selecting = "1";
+  if (isSelected) line.dataset.selected = "1";
+
+  // Selection mode: check control + tap-to-toggle; hide per-row edit/globe/delete to keep phones clear.
+  if (selecting) {
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "row-check";
+    check.setAttribute("aria-pressed", String(isSelected));
+    check.setAttribute("aria-label", `${isSelected ? "Deselect" : "Select"} ${labelRef(runRef)}`);
+    check.innerHTML = isSelected ? ICONS.check : "";
+    check.addEventListener("click", () => toggleRunSelected(runRef));
+
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "row-link";
+    link.setAttribute("aria-label", `${isSelected ? "Deselect" : "Select"} ${labelRef(runRef)}`);
+    link.addEventListener("click", () => toggleRunSelected(runRef));
+    const ref = document.createElement("span");
+    ref.className = "ref";
+    ref.textContent = labelRef(runRef);
+    const quote = document.createElement("span");
+    quote.className = "quote";
+    quote.textContent = records.flatMap((r) => r.highlights.map((h) => h.quote)).filter(Boolean).join(" … ");
+    link.append(ref, quote);
+    line.append(check, link);
+    li.append(line);
+    return li;
+  }
+
+  const colorId = topColor(records[0], ids);
+  const colorObj = colors.find((x) => x.id === colorId) ?? colors[0];
   const dot = document.createElement("button");
   dot.type = "button";
   dot.className = "dot";
-  paint(dot, topColor(records[0], ids));
-  dot.setAttribute("aria-label", `Change color of ${labelRef(runRef)}`);
+  paint(dot, colorId);
+  dot.setAttribute("aria-label", `Change color of ${labelRef(runRef)} (${colorName(colorObj)})`);
+  dot.title = colorName(colorObj);
   dot.setAttribute("aria-haspopup", "true");
   dot.addEventListener("click", () =>
     openColorPicker(dot, topColor(records[0], ids), (id) => {
       const t = now();
-      library.putMany(records.map((r) => ({ ...r, highlights: r.highlights.map((h) => ({ ...h, color: id, edited: t })) })));
+      library.putMany(recolorRecords(records, id, t));
     }),
   );
 
@@ -1271,13 +1638,23 @@ function row({ ref: runRef, records }) {
   const ref = document.createElement("span");
   ref.className = "ref";
   ref.textContent = labelRef(runRef);
+  link.append(ref);
+  if (verseText.key) {
+    const chev = document.createElement("span");
+    chev.className = "row-chevron";
+    chev.setAttribute("aria-hidden", "true");
+    link.append(chev);
+  }
+  if (colorObj?.name) {
+    const cat = document.createElement("span");
+    cat.className = "row-category";
+    cat.textContent = colorObj.name;
+    link.append(cat);
+  }
   const quote = document.createElement("span");
   quote.className = "quote";
   quote.textContent = records.flatMap((r) => r.highlights.map((h) => h.quote)).filter(Boolean).join(" … ");
-  link.append(ref, quote);
-
-  const line = document.createElement("div");
-  line.className = "row";
+  link.append(quote);
 
   const edit = iconButton("button", "edit", `Edit ${labelRef(runRef)}`);
   edit.classList.add("edit");
@@ -1291,7 +1668,7 @@ function row({ ref: runRef, records }) {
     label: labelRef(runRef),
     idleHTML: ICONS.trash,
     onConfirm: async () => {
-      await library.putMany(records.map((r) => tombstone(r.ref)));
+      await library.putMany(tombstoneRecords(records));
       flash(`Deleted ${labelRef(runRef)}.`, { label: "Undo", run: () => library.putMany(records), ms: 5000 });
     },
   });
@@ -1336,7 +1713,7 @@ function editRow(li, line, run) {
   for (const el of line.querySelectorAll(":scope > .dot, :scope > .actions")) el.inert = true;
   editing = run.ref;
   listSig = null; // the edit changes the row by hand, so the next render rebuilds it
-  field.value = labelRef(run.ref);
+  field.value = labelRef(run.ref).replaceAll("–", "-");
   const start = refText(field);
   field.focus();
 
@@ -1646,9 +2023,21 @@ function openColorPicker(anchor, current, pick) {
     ...colors.map((c) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "dot";
-      b.title = colorName(c);
-      paint(b, c.id);
+      b.className = "color-option";
+      const swatch = document.createElement("span");
+      swatch.className = "dot";
+      paint(swatch, c.id);
+      const label = document.createElement("span");
+      label.className = "color-option-name";
+      label.textContent = colorName(c);
+      b.append(swatch, label);
+      if (current === c.id) {
+        const check = document.createElement("span");
+        check.className = "color-option-check";
+        check.setAttribute("aria-hidden", "true");
+        check.innerHTML = ICONS.check;
+        b.append(check);
+      }
       b.setAttribute("aria-label", `Make ${colorName(c)}`);
       b.setAttribute("aria-pressed", String(current === c.id));
       b.addEventListener("click", () => {
@@ -1664,7 +2053,7 @@ function openColorPicker(anchor, current, pick) {
     if (anchor.isConnected && (!focus || focus === document.body || pop.contains(focus))) anchor.focus();
   };
   placePopover(pop, anchor);
-  pop.querySelector('[aria-pressed="true"]')?.focus();
+  (pop.querySelector('[aria-pressed="true"]') ?? pop.querySelector("button"))?.focus();
 }
 
 // ---- colors
@@ -1722,12 +2111,21 @@ async function deleteColor(c) {
   ]);
 }
 
+async function addCustomColor(rawName, rawHex) {
+  const trimmed = String(rawName ?? "").trim();
+  if (!library || !trimmed) return false;
+  const id = `c-${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(36).padStart(2, "0")).join("")}`;
+  const hex = String(rawHex || "#3a7bd5").toLowerCase();
+  await library.put({ kind: "color", ref: id, name: trimmed, hex, created: now() });
+  return true;
+}
+
 $("#add-color").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);
-  const id = `c-${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(36).padStart(2, "0")).join("")}`;
-  await library.put({ kind: "color", ref: id, name: form.get("name").trim(), hex: form.get("hex").toLowerCase(), created: now() });
-  e.target.name.value = "";
+  if (await addCustomColor(form.get("name"), form.get("hex"))) {
+    e.target.name.value = "";
+  }
 });
 
 // ---- sync choices & connected apps
@@ -1788,6 +2186,8 @@ function renderSync() {
   $("#use-server").checked = on;
   $("#use-server").disabled = !signedInUser;
   $("#use-server").setAttribute("aria-checked", String(on));
+  const signInRow = $("#sync-signin-row");
+  if (signInRow) signInRow.hidden = Boolean(signedInUser);
   loadGrants();
 }
 
@@ -1826,8 +2226,11 @@ let passkeysExpanded = false;
 function renderAccount() {
   const name = library?.name || signedInUser?.name || "Personal";
   if ($("#account-display-name")) $("#account-display-name").textContent = name;
-  if ($("#account-display-email")) $("#account-display-email").textContent = signedInUser ? "…" : "Not signed in";
+  if ($("#account-display-email")) $("#account-display-email").textContent = signedInUser ? "…" : "Local library on this device";
   if ($("#account-note")) $("#account-note").textContent = "";
+  if ($("#lock")) $("#lock").hidden = !signedInUser;
+  if ($("#account-signin")) $("#account-signin").hidden = Boolean(signedInUser);
+  if ($("#methods-slots")) $("#methods-slots").hidden = !signedInUser;
   passkeysExpanded = false;
   hideLinkEmailForms();
   loadMethods();
@@ -2050,7 +2453,7 @@ async function loadMethods() {
   if (!slots) return;
   if (!signedInUser) {
     hideLinkEmailForms();
-    if ($("#account-display-email")) $("#account-display-email").textContent = "Not signed in";
+    if ($("#account-display-email")) $("#account-display-email").textContent = "Local library on this device";
     renderSlots({
       signedIn: false,
       email: null,
@@ -2210,7 +2613,20 @@ $("#add-apple")?.addEventListener("click", async () => {
   }
 });
 
-for (const back of document.querySelectorAll(".back")) back.addEventListener("click", () => (show("main"), render()));
+async function closeSettingsPanel() {
+  if (document.activeElement instanceof HTMLElement && document.activeElement.closest("#color-list")) {
+    document.activeElement.blur();
+  }
+  const addForm = $("#add-color");
+  if (!$("#colors")?.hidden && addForm?.name?.value?.trim()) {
+    await addCustomColor(addForm.name.value, addForm.hex?.value);
+    addForm.name.value = "";
+  }
+  show("main");
+  render();
+}
+
+for (const back of document.querySelectorAll(".back")) back.addEventListener("click", () => void closeSettingsPanel());
 
 // ---- the library's name, edited in place
 
@@ -2254,15 +2670,32 @@ document.addEventListener("pointerdown", (e) => {
   if (filters?.open && !filters.contains(e.target)) filters.open = false;
 });
 document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
   const menu = $("#menu");
-  if (e.key === "Escape" && menu?.open) {
+  if (menu?.open) {
+    e.preventDefault();
     menu.open = false;
     menu.querySelector("summary")?.focus();
+    return;
   }
   const filters = $("#filters");
-  if (e.key === "Escape" && filters?.open) {
+  if (filters?.open) {
+    e.preventDefault();
     filters.open = false;
     filters.querySelector("summary")?.focus();
+    return;
+  }
+  if (e.defaultPrevented || $("#color-pop")?.matches(":popover-open")) return;
+  const openPanel = document.querySelector(".settings-panel:not([hidden])");
+  if (openPanel) {
+    if (document.activeElement?.closest?.(".passkey-rename-form:not([hidden]), .link-email-form:not([hidden])")) return;
+    e.preventDefault();
+    void closeSettingsPanel();
+    return;
+  }
+  if (!$("#main")?.hidden && !$("#omni-card")?.hidden && !suggesting(refField) && !selecting && !editing) {
+    e.preventDefault();
+    closeOmniCard();
   }
 });
 
@@ -2365,6 +2798,8 @@ $("#import-file").addEventListener("change", async (e) => {
 });
 
 menuAction("#lock", lock);
+menuAction("#sync-signin", openSignIn);
+menuAction("#account-signin", openSignIn);
 
 $("#erase").addEventListener("click", async () => {
   const ok = confirm("Erase this library from the server and this device?");
