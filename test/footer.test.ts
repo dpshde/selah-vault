@@ -18,13 +18,13 @@ test("the footer holds the theme, the contract and the auth status, and #list-to
   const mobile = css.slice(css.indexOf("/* —— Mobile library (≤600px)"));
   expect(mobile).toContain("#main:not([hidden]) > #list { flex: 1 1 auto; }");
   // Soft scroll-edge fades while the highlights list overflows; list-total stays beneath #list.
-  // Overlays use --bg / --accent (not mask-image) so dark group headers aren't washed gray.
+  // Overlays use --bg / --raised (not mask-image) so group headers aren't washed gray.
   expect(app).toContain("function syncListScrollFade");
   expect(app).toContain("scheduleListScrollFade()");
-  expect(app).toContain('list.dataset.fadeTop = "accent"');
+  expect(app).toContain('list.dataset.fadeTop = "raised"');
   expect(css).toContain("--list-fade-size");
   expect(css).toContain("--list-fade-top: var(--bg)");
-  expect(css).toContain("#main:not([hidden]) > #list[data-fade-top=\"accent\"] { --list-fade-top: var(--accent); }");
+  expect(css).toContain("#main:not([hidden]) > #list[data-fade-top=\"raised\"] { --list-fade-top: var(--raised); }");
   expect(css).toMatch(/#main:not\(\[hidden\]\) > #list::before\s*\{[^}]*linear-gradient\(to bottom, var\(--list-fade-top\)/);
   expect(css).toMatch(/#main:not\(\[hidden\]\) > #list::after\s*\{[^}]*linear-gradient\(to top, var\(--bg\)/);
   expect(css).not.toMatch(/#main:not\(\[hidden\]\) > #list\[data-fade=[^\]]+\]\s*\{[^}]*mask-image/);
@@ -62,12 +62,12 @@ test("the ••• menu is Sync · Colors · Backup · Account, then theme and 
   expect(css).toMatch(/#menu > div button > svg[\s\S]*?width: 16px/);
 });
 
-test("the footer never says anything about sync, and auth status is only signed in or out", () => {
+test("the footer never says anything about sync, and auth status distinguishes signed in, local only, and signed out", () => {
   const visible = footer.replace(/<[^>]*>/g, " ").toLowerCase();
   expect(visible).not.toContain("sync");
   expect(visible).not.toMatch(/online|offline|syncing/);
   const show = /function show\(id\) \{([\s\S]*?)\n\}/.exec(app)?.[1] ?? "";
-  expect(show).toContain('SIGNED_IN.has(id) ? "Signed in" : "Signed out"');
+  expect(show).toContain('SIGNED_IN.has(id) ? (signedInUser ? "Signed in" : "Local only") : "Signed out"');
   expect(show).toContain('$("#auth-status")');
   expect(show).not.toContain("menu-auth-status");
   expect(app).toContain('const SIGNED_IN = new Set(["main", "colors", "backup", "sync", "account"]);');
