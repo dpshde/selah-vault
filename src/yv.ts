@@ -18,11 +18,20 @@ const BROWSER_TTL = 24 * 3600;
 
 type Deps = { fetch: typeof fetch; cache: Cache | null };
 
+/** A missing key, or the unreplaced build-time placeholder, must not be sent upstream. */
+export function usableYvpAppKey(appKey: string | undefined | null): string | undefined {
+  const key = appKey?.trim();
+  if (!key || key === "YVP_PUBLIC_APP_KEY") return undefined;
+  return key;
+}
+
+
 export async function yvProxy(request: Request, appKey: string | undefined, deps: Deps): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.slice(YV_PREFIX.length);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
-  if (!appKey) return new Response(null, { status: 404 });
+  const key = usableYvpAppKey(appKey);
+  if (!key) return new Response(null, { status: 404 });
   if (!ALLOWED.some((re) => re.test(path))) return new Response(null, { status: 404 });
   const query = new URLSearchParams(url.search);
   query.delete("app_key"); // the Worker sends its own; never part of the cache key
@@ -33,8 +42,8 @@ export async function yvProxy(request: Request, appKey: string | undefined, deps
   const hit = await deps.cache?.match(cacheKey);
   if (hit) return withHeaders(hit, "HIT");
   const upstream = new URL(target);
-  if (path.startsWith("/v1/fonts/")) upstream.searchParams.set("app_key", appKey);
-  const res = await deps.fetch(upstream, { headers: { "x-yvp-app-key": appKey, accept: request.headers.get("accept") ?? "*/*" } });
+  if (path.startsWith("/v1/fonts/")) upstream.searchParams.set("app_key", key);
+  const res = await deps.fetch(upstream, { headers: { "x-yvp-app-key": key, accept: request.headers.get("accept") ?? "*/*" } });
   if (!res.ok) return withHeaders(new Response(res.body, { status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/json" } }), "BYPASS", false);
   const body = await res.arrayBuffer();
   const stored = new Response(body, {

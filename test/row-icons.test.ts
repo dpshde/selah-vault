@@ -9,7 +9,8 @@ test("every row gets the globe to route.bible between the pencil and the trash, 
   // The key is kept on the device and the config fetch is retried, so a slow or failed /config.json
   // doesn't drop the book from every row.
   expect(app).toContain('const YV_KEY = "selah-vault:yv-key";');
-  expect(app).toContain("useVerseKey(localStorage.getItem(YV_KEY))");
+  expect(app).toContain("function usableVerseKey(yvpPublicAppKey)");
+  expect(app).toContain("useVerseKey(kept)");
   expect(app).toContain("setTimeout(() => loadConfig(false), 2000)");
 });
 

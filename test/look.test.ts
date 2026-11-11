@@ -86,3 +86,10 @@ test("the Account page lists sign-in methods and holds Log out; menu opens it", 
   expect(css).toContain(".icon[hidden] { display: none; }");
 });
 
+test("the inline-edit suggestion popover is wide enough for a verse grid and CSP allows YouVersion fonts", () => {
+  expect(css).toMatch(/\.ref-edit si-passage-input::part\(listbox\)\s*\{[^}]*min-width:\s*min\(20rem, calc\(100vw - 2\.5rem\)\)/);
+  expect(css).toMatch(/\.ref-edit si-passage-input::part\(listbox\)\s*\{[^}]*overflow-x:\s*hidden/);
+  expect(css).toContain(".row.editing { position: relative; z-index: 5; overflow: visible; }");
+  const headers = read("_headers");
+  expect(headers).toMatch(/font-src 'self' https:\/\/cdn\.youversion\.com;/);
+});

@@ -57,7 +57,7 @@ test("a failing load doesn't stop the rest", async () => {
 test("the app wires it up, and the spinner only appears after 300ms", () => {
   const read = (p: string) => readFileSync(new URL(`../public/${p}`, import.meta.url), "utf8");
   const app = read("app.js"), css = read("style.css");
-  expect(app).toContain("defineKeepingLoaded(() => defineScripturePassage({ yvpPublicAppKey }))");
+  expect(app).toContain("defineKeepingLoaded(() => defineScripturePassage({ yvpPublicAppKey: key }))");
   expect(app).toContain("warmer.add(runRef)");
   expect(app).toContain("toggle.addEventListener(\"pointerenter\", warm)");
   expect(css).toContain("si-passage::part(loader) { visibility: hidden; animation: si-loader-late 0s linear .3s forwards; }");
