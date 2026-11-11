@@ -1218,6 +1218,12 @@ const ICONS = {
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+  statusOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>',
+  chevronDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
+  chevronUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>',
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
 };
 
 function iconButton(tag, icon, label) {
@@ -1814,19 +1820,49 @@ function emailFormsOpen() {
     || Boolean($("#link-email-verify-form") && !$("#link-email-verify-form").hidden);
 }
 
+/** Passkey sub-list is collapsed until the row's chevron is opened. */
+let passkeysExpanded = false;
+
 function renderAccount() {
   const name = library?.name || signedInUser?.name || "Personal";
   if ($("#account-display-name")) $("#account-display-name").textContent = name;
   if ($("#account-display-email")) $("#account-display-email").textContent = signedInUser ? "…" : "Not signed in";
   if ($("#account-note")) $("#account-note").textContent = "";
+  passkeysExpanded = false;
   hideLinkEmailForms();
   loadMethods();
 }
 
-function setSlotStatus(el, text, on) {
+function setSlotStatus(el, on) {
   if (!el) return;
-  el.textContent = text;
-  el.classList.toggle("is-on", Boolean(on));
+  const enabled = Boolean(on);
+  el.innerHTML = enabled ? ICONS.check : ICONS.statusOff;
+  el.classList.toggle("is-on", enabled);
+  const label = enabled ? "Enabled" : "Not set up";
+  el.setAttribute("aria-label", label);
+  el.setAttribute("title", label);
+  el.setAttribute("role", "img");
+}
+
+function setSlotDetail(el, text) {
+  if (!el) return;
+  const value = String(text ?? "").trim();
+  el.textContent = value;
+  el.hidden = !value;
+}
+
+function syncPasskeyExpand(count) {
+  const open = passkeysExpanded && count > 0;
+  const list = $("#slot-passkey-list");
+  const btn = $("#toggle-passkeys");
+  if (list) list.hidden = !open;
+  if (!btn) return;
+  btn.hidden = count === 0;
+  btn.setAttribute("aria-expanded", String(open));
+  const label = open ? "Hide passkeys" : "Show passkeys";
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+  btn.innerHTML = open ? ICONS.chevronUp : ICONS.chevronDown;
 }
 
 async function removeMethod(payload, btn) {
@@ -1858,18 +1894,15 @@ function passkeyRow(pk, canRemove) {
   strong.textContent = passkeyTitle(pk);
   const small = document.createElement("small");
   const added = formatMethodDate(pk.created_at);
-  small.textContent = added ? `Added ${added}` : "Passkey";
+  small.textContent = added || "";
+  if (!added) small.hidden = true;
   meta.append(strong, small);
   const actions = document.createElement("div");
   actions.className = "method-slot-actions";
-  const renameBtn = document.createElement("button");
-  renameBtn.type = "button";
-  renameBtn.className = "quiet passkey-rename";
-  renameBtn.innerHTML = `${ICONS.edit}<span>Rename</span>`;
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.className = "quiet danger";
-  removeBtn.textContent = "Remove";
+  const title = passkeyTitle(pk);
+  const renameBtn = iconButton("button", "edit", `Rename ${title}`);
+  const removeBtn = iconButton("button", "trash", `Remove ${title}`);
+  removeBtn.classList.add("trash");
   removeBtn.disabled = !canRemove;
   if (!canRemove) {
     removeBtn.title = "You need at least one sign-in method.";
@@ -1889,13 +1922,9 @@ function passkeyRow(pk, canRemove) {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.setAttribute("aria-label", "Passkey name");
-  const save = document.createElement("button");
+  const save = iconButton("button", "check", "Save name");
   save.type = "submit";
-  save.textContent = "Save";
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "quiet";
-  cancel.textContent = "Cancel";
+  const cancel = iconButton("button", "close", "Cancel rename");
   form.append(input, save, cancel);
 
   renameBtn.addEventListener("click", () => {
@@ -1945,14 +1974,17 @@ function renderSlots({ signedIn, email, apple, appleConfigured, emailConfigured,
   const pkOn = keys.length > 0;
   pkSlot?.classList.toggle("is-enabled", pkOn);
   pkSlot?.classList.remove("is-unavailable");
-  setSlotStatus($("#slot-passkey-status"), pkOn ? "Enabled" : "Not set up", pkOn);
+  setSlotStatus($("#slot-passkey-status"), pkOn);
+  const pkDetail = keys.length === 1
+    ? passkeyTitle(keys[0])
+    : keys.length > 1 ? `${keys.length} passkeys` : "";
+  setSlotDetail($("#slot-passkey-detail"), pkDetail);
   const addPk = $("#add-passkey");
   if (addPk) addPk.hidden = !signedIn || !passkeysAvailable();
   const pkList = $("#slot-passkey-list");
-  if (pkList) {
-    pkList.replaceChildren(...keys.map((pk) => passkeyRow(pk, canRemove)));
-    pkList.hidden = keys.length === 0;
-  }
+  if (pkList) pkList.replaceChildren(...keys.map((pk) => passkeyRow(pk, canRemove)));
+  if (!pkOn) passkeysExpanded = false;
+  syncPasskeyExpand(keys.length);
   const pkHint = $("#slot-passkey-hint");
   if (pkHint) pkHint.hidden = !(pkOn && !canRemove);
 
@@ -1961,15 +1993,11 @@ function renderSlots({ signedIn, email, apple, appleConfigured, emailConfigured,
   const emailReady = Boolean(emailConfigured);
   emailSlot?.classList.toggle("is-enabled", emailOn);
   emailSlot?.classList.toggle("is-unavailable", signedIn && !emailReady && !emailOn);
-  const emailStatus = !signedIn || emailReady || emailOn
-    ? (emailOn ? "Enabled" : "Not set up")
-    : "Not available yet";
-  setSlotStatus($("#slot-email-status"), emailStatus, emailOn);
-  const emailDetail = $("#slot-email-detail");
-  if (emailDetail) {
-    emailDetail.textContent = emailOn ? email : "";
-    emailDetail.hidden = !emailOn;
-  }
+  setSlotStatus($("#slot-email-status"), emailOn);
+  setSlotDetail(
+    $("#slot-email-detail"),
+    emailOn ? email : (signedIn && !emailReady ? "Not available yet" : ""),
+  );
   const addEmail = $("#add-email");
   const changeEmail = $("#change-email");
   const removeEmail = $("#remove-email");
@@ -1994,13 +2022,11 @@ function renderSlots({ signedIn, email, apple, appleConfigured, emailConfigured,
   const appleReady = Boolean(appleConfigured);
   appleSlot?.classList.toggle("is-enabled", appleOn);
   appleSlot?.classList.toggle("is-unavailable", signedIn && !appleReady && !appleOn);
-  const appleStatus = appleOn ? "Enabled" : (appleReady || !signedIn ? "Not set up" : "Not available yet");
-  setSlotStatus($("#slot-apple-status"), appleStatus, appleOn);
-  const appleDetail = $("#slot-apple-detail");
-  if (appleDetail) {
-    appleDetail.textContent = "Linked";
-    appleDetail.hidden = !appleOn;
-  }
+  setSlotStatus($("#slot-apple-status"), appleOn);
+  setSlotDetail(
+    $("#slot-apple-detail"),
+    appleOn ? "Linked" : (signedIn && !appleReady ? "Not available yet" : ""),
+  );
   const addApple = $("#add-apple");
   const removeApple = $("#remove-apple");
   if (addApple) addApple.hidden = !signedIn || !appleReady || appleOn;
@@ -2070,6 +2096,11 @@ function openLinkEmailForm() {
   }
 }
 
+$("#toggle-passkeys")?.addEventListener("click", () => {
+  passkeysExpanded = !passkeysExpanded;
+  const n = $("#slot-passkey-list")?.children.length ?? 0;
+  syncPasskeyExpand(n);
+});
 $("#add-email")?.addEventListener("click", openLinkEmailForm);
 $("#change-email")?.addEventListener("click", openLinkEmailForm);
 $("#remove-email")?.addEventListener("click", () => removeMethod({ type: "email" }, $("#remove-email")));
@@ -2274,6 +2305,7 @@ async function addPasskey() {
 
 screenAction("#add-passkey", "#account-note", async () => {
   const said = await addPasskey();
+  passkeysExpanded = true;
   await loadMethods();
   return said;
 });
