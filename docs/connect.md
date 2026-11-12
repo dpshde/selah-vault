@@ -26,7 +26,8 @@ location.assign(
 ```
 
 Allowed `redirect_uri` values:
-- Allowlisted HTTPS origins in `CLIENTS` (`public/grants.js`): `https://route.bible`, `https://proofs.selah.tools`, `https://proofs.dpshade.workers.dev`, `https://vault-highlights-route-bible.dpshade.workers.dev`
+- Allowlisted HTTPS origins in `CLIENTS` (`public/grants.js`): `https://route.bible`, `https://www.route.bible`, `https://proofs.selah.tools`, `https://proofs.dpshade.workers.dev`, `https://vault-highlights-route-bible.dpshade.workers.dev`
+- route.bible Workers previews matching `ROUTE_PREVIEW_ORIGIN_RE`: `https://route-bible.dpshade.workers.dev`, `https://<branch>-route-bible.dpshade.workers.dev`, `https://route-bible-preview.dpshade.workers.dev`. Their `client_id` is the preview hostname.
 - Native iOS custom scheme: `proofs://oauth/callback`
 - Any loopback origin: `http://localhost:<port>/*` or `http://127.0.0.1:<port>/*`
 

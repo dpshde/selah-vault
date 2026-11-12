@@ -7,6 +7,12 @@ export const CLIENTS = {
     icon: "/apps/route-bible.svg",
     homepage: "https://route.bible",
   },
+  "https://www.route.bible": {
+    id: "route.bible",
+    name: "route.bible",
+    icon: "/apps/route-bible.svg",
+    homepage: "https://route.bible",
+  },
   "https://vault-highlights-route-bible.dpshade.workers.dev": {
     id: "route.bible",
     name: "route.bible (preview)",
@@ -28,6 +34,12 @@ export const CLIENTS = {
 };
 
 export const CLIENT_ORIGINS = Object.keys(CLIENTS);
+/** route.bible's Workers previews (`route-bible`, `<branch>-route-bible`, `route-bible-preview`); same rule as src/clients.ts. */
+export const ROUTE_PREVIEW_ORIGIN_RE = /^https:\/\/(?:[a-z0-9-]+-)?route-bible(?:-preview)?\.dpshade\.workers\.dev$/;
+const routePreview = (origin) => ROUTE_PREVIEW_ORIGIN_RE.test(origin)
+  ? { id: new URL(origin).hostname, name: "route.bible (preview)", icon: "/apps/route-bible.svg", homepage: origin }
+  : null;
+const clientFor = (origin) => (Object.hasOwn(CLIENTS, origin) ? CLIENTS[origin] : routePreview(origin));
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const PROOFS_IDS = new Set(["proofs", "proofs-web", "proofs-ios"]);
 
@@ -54,9 +66,10 @@ export function allowedClient(redirectUri, clientId) {
     if (url.protocol === "http:" && LOOPBACK.has(url.hostname)) {
       return clientId === "" ? null : url.origin;
     }
-    if (url.protocol !== "https:" || !Object.hasOwn(CLIENTS, url.origin)) return null;
-    if (!clientId || clientId === url.origin || clientId === CLIENTS[url.origin].id) return url.origin;
-    if (CLIENTS[url.origin].id === "proofs" && PROOFS_IDS.has(clientId)) return url.origin;
+    const client = url.protocol === "https:" ? clientFor(url.origin) : null;
+    if (!client) return null;
+    if (!clientId || clientId === url.origin || clientId === client.id || clientId === url.hostname) return url.origin;
+    if (client.id === "proofs" && PROOFS_IDS.has(clientId)) return url.origin;
     return null;
   } catch {
     return null;
@@ -69,7 +82,8 @@ export function clientInfo(origin, clientId) {
     return { name: "Proofs", icon: "/apps/proofs.svg", homepage: "https://proofs.selah.tools" };
   }
   if (origin === "route.bible" || clientId === "route.bible") return CLIENTS["https://route.bible"];
-  if (Object.hasOwn(CLIENTS, origin)) return CLIENTS[origin];
+  const known = clientFor(origin);
+  if (known) return known;
   const label = clientId && !clientId.startsWith("http") ? clientId : "Local development";
   return { name: label, icon: null, homepage: origin };
 }

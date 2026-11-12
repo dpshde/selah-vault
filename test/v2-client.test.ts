@@ -53,6 +53,17 @@ describe("public/grants.js — OAuth 2.1 clients and scopes", () => {
     expect(allowedClient("https://route.bible/cb#frag", "route.bible")).toBeNull();
   });
 
+  test("allowedClient accepts route.bible Workers previews on the dpshade subdomain only", () => {
+    expect(allowedClient("https://www.route.bible/", "route.bible")).toBe("https://www.route.bible");
+    const host = "oauth-v2-route-bible.dpshade.workers.dev";
+    expect(allowedClient(`https://${host}/`, host)).toBe(`https://${host}`);
+    expect(allowedClient("https://route-bible-preview.dpshade.workers.dev/", "route-bible-preview.dpshade.workers.dev")).toBe("https://route-bible-preview.dpshade.workers.dev");
+    expect(clientInfo(`https://${host}`, host).name).toBe("route.bible (preview)");
+    expect(allowedClient(`https://${host}/`, "evil")).toBeNull();
+    expect(allowedClient("https://x-route-bible.evil.workers.dev/", "x-route-bible.evil.workers.dev")).toBeNull();
+    expect(allowedClient(`http://${host}/`, host)).toBeNull();
+  });
+
   test("parseScopes, grantAllows, clientInfo, and consentLines work across all scopes", () => {
     expect(parseScopes("srs:write read passages:write read")).toEqual(["passages:write", "read", "srs:write"]);
     expect(parseScopes("read unknown")).toBeNull();

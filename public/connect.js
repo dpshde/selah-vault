@@ -11,6 +11,7 @@ import {
   verifyEmailCode,
 } from "./passkey.js";
 import { allowedClient, clientInfo, consentLines, parseScopes } from "./grants.js";
+import { appleErrorMessage, applePopupSignIn, idTokenFromAppleResponse, preloadAppleSdk } from "./apple-auth.js";
 
 const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
@@ -128,6 +129,21 @@ if (!validRequest) {
     if (user) showConsent(user);
     else step("signin");
   });
+  loadAppleConfig();
+}
+
+/** Shows Sign in with Apple only when the server has it configured, and preloads Apple's SDK so a tap opens the popup at once. */
+async function loadAppleConfig() {
+  const button = $("#apple-login");
+  if (!button) return;
+  button.hidden = true;
+  try {
+    const res = await fetch("/config.json", { cache: "no-store" });
+    const data = res.ok ? await res.json() : {};
+    if (!data.appleClientId) return;
+    button.hidden = false;
+    preloadAppleSdk(data.appleClientId);
+  } catch {}
 }
 
 $("#switch")?.addEventListener("click", async () => {
@@ -185,17 +201,13 @@ $("#email-verify-form")?.addEventListener("submit", async (e) => {
 $("#apple-login")?.addEventListener("click", async () => {
   $("#signin-error").textContent = "";
   try {
-    if (globalThis.AppleID?.auth) {
-      const resp = await globalThis.AppleID.auth.signIn();
-      const idToken = resp?.authorization?.id_token;
-      if (!idToken) throw new Error("Apple did not return an identity token.");
-      const res = await signInWithApple(idToken);
-      showConsent(res?.user ?? (await fetchSession()));
-      return;
-    }
-    throw new Error("Sign in with Apple isn't configured on this server yet. Use a passkey or email.");
+    // signIn() must run in this turn of the click — no await before it (iOS Safari).
+    const resp = await applePopupSignIn();
+    const { idToken, name } = idTokenFromAppleResponse(resp);
+    const res = await signInWithApple(idToken, { name });
+    showConsent(res?.user ?? (await fetchSession()));
   } catch (error) {
-    if (!cancelled(error)) $("#signin-error").textContent = error.message;
+    if (!cancelled(error)) $("#signin-error").textContent = appleErrorMessage(error);
   }
 });
 

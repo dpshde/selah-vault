@@ -494,11 +494,27 @@ describe("OAuth 2.1 + PKCE (S256)", () => {
     );
     expect(evilGet.status).toBe(400);
 
+    // route.bible previews only on the account's own workers.dev subdomain, with their own hostname as client_id
+    for (const [cid, uri] of [
+      ["x-route-bible.evil.workers.dev", "https://x-route-bible.evil.workers.dev/"],
+      ["route.bible", "https://route-bible.dpshade.workers.dev.evil.example/"],
+      ["evil", "https://oauth-v2-route-bible.dpshade.workers.dev/"],
+    ]) {
+      const bad = await h.fetch(
+        `/oauth/authorize?client_id=${encodeURIComponent(cid)}&redirect_uri=${encodeURIComponent(uri)}&response_type=code&code_challenge=${challenge}&code_challenge_method=S256&state=state_123456`,
+        { headers: { accept: "application/json" } },
+      );
+      expect(bad.status).toBe(400);
+    }
+
     // Accepts native proofs://oauth/callback and loopback and route.bible
     for (const [cid, uri] of [
       ["proofs-ios", "proofs://oauth/callback"],
       ["route.bible", "https://route.bible/callback"],
       ["vault-highlights-route-bible.dpshade.workers.dev", "https://vault-highlights-route-bible.dpshade.workers.dev/cb"],
+      ["oauth-v2-route-bible.dpshade.workers.dev", "https://oauth-v2-route-bible.dpshade.workers.dev/"],
+      ["route-bible-preview.dpshade.workers.dev", "https://route-bible-preview.dpshade.workers.dev/"],
+      ["route.bible", "https://www.route.bible/"],
       ["proofs", "https://proofs.dpshade.workers.dev/cb"],
       ["proofs", "https://proofs.selah.tools/oauth/callback"],
       ["claude-local", "http://127.0.0.1:54321/callback"],

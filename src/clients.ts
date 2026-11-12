@@ -29,6 +29,12 @@ const WEB_ORIGINS: Record<string, ClientMetadata> = {
     icon: "/apps/route-bible.svg",
     homepage: "https://route.bible",
   },
+  "https://www.route.bible": {
+    id: "route.bible",
+    name: "route.bible",
+    icon: "/apps/route-bible.svg",
+    homepage: "https://route.bible",
+  },
   "https://vault-highlights-route-bible.dpshade.workers.dev": {
     id: "vault-highlights-route-bible.dpshade.workers.dev",
     name: "route.bible (preview)",
@@ -68,6 +74,19 @@ const ROUTE_IDS = new Set([
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/**
+ * route.bible's Workers previews: the `route-bible` Worker itself, its per-branch version
+ * aliases (`<branch>-route-bible`), and the manual `route-bible-preview` Worker, all on the
+ * account's own workers.dev subdomain. Only that account can publish to these hostnames.
+ */
+export const ROUTE_PREVIEW_ORIGIN_RE = /^https:\/\/(?:[a-z0-9-]+-)?route-bible(?:-preview)?\.dpshade\.workers\.dev$/;
+
+function routePreviewClient(origin: string): ClientMetadata | null {
+  if (!ROUTE_PREVIEW_ORIGIN_RE.test(origin)) return null;
+  const host = new URL(origin).hostname;
+  return { id: host, name: "route.bible (preview)", icon: "/apps/route-bible.svg", homepage: origin };
+}
+
 export function validateOAuthClient(clientIdRaw: unknown, redirectUriRaw: unknown): ClientMetadata | null {
   if (typeof clientIdRaw !== "string" || typeof redirectUriRaw !== "string") return null;
   const clientId = clientIdRaw.trim();
@@ -92,10 +111,10 @@ export function validateOAuthClient(clientIdRaw: unknown, redirectUriRaw: unknow
   }
 
   if (url.protocol !== "https:") return null;
-  const meta = WEB_ORIGINS[url.origin];
+  const meta = WEB_ORIGINS[url.origin] ?? routePreviewClient(url.origin);
   if (!meta) return null;
 
-  if (url.origin.includes("route.bible")) {
+  if (url.origin.includes("route.bible") || url.origin.includes("route-bible")) {
     if (!ROUTE_IDS.has(clientId) && clientId !== url.origin && clientId !== url.hostname) return null;
     return { ...meta, id: clientId };
   }
