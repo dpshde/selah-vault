@@ -27,11 +27,9 @@ body.oauth { justify-content: center; }
 .oauth-primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); }
 .oauth-secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
 .oauth-primary:disabled { opacity: .6; cursor: progress; }
-.oauth-key { text-align: left; margin-top: .75rem; }
-.oauth-key summary { cursor: pointer; color: var(--fg-2); font-size: .85rem; text-decoration: underline; text-underline-offset: 3px; }
-.oauth-key form { display: grid; gap: .6rem; margin-top: .75rem; }
-.oauth-key label { display: grid; gap: .3rem; font-size: .82rem; color: var(--fg-2); }
+.email-auth-form { text-align: left; margin-top: .75rem; }
+.email-auth-form label { display: grid; gap: .3rem; font-size: .82rem; color: var(--fg-2); }
 .oauth-foot { margin: 1.1rem 0 0; color: var(--muted); font-size: .75rem; }
 .oauth .error:empty { display: none; }
 @media (max-width: 420px) { .oauth-actions { grid-template-columns: 1fr; } .oauth-actions #allow { order: -1; } .oauth-card { padding: 1.5rem 1.1rem 1.1rem; } }
-/* asset-rev 2 */
+/* asset-rev 3 */
