@@ -68,6 +68,19 @@ function showConsent(user) {
 
 let pendingEmail = "";
 
+function resetEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = true;
+  $("#email-login")?.setAttribute("aria-expanded", "false");
+}
+
+function showEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  $("#email-login")?.setAttribute("aria-expanded", "true");
+  $("#email-input")?.focus();
+}
+
 async function decide(approve) {
   $("#allow").disabled = true;
   $("#deny").disabled = true;
@@ -123,7 +136,7 @@ if (!validRequest) {
   if (!passkeysAvailable()) {
     $("#passkey-login").hidden = true;
     $("#passkey-create-row").hidden = true;
-    $("#email-details").open = true;
+    showEmailSignIn();
   }
   fetchSession().then((user) => {
     if (user) showConsent(user);
@@ -148,7 +161,18 @@ async function loadAppleConfig() {
 
 $("#switch")?.addEventListener("click", async () => {
   await signOutSession();
+  resetEmailSignIn();
+  if (!passkeysAvailable()) showEmailSignIn();
   step("signin");
+});
+
+$("#email-login")?.addEventListener("click", () => {
+  $("#signin-error").textContent = "";
+  if (!$("#email-send-form").hidden) {
+    resetEmailSignIn();
+    return;
+  }
+  showEmailSignIn();
 });
 
 $("#passkey-login")?.addEventListener("click", async () => {

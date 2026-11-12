@@ -24,6 +24,19 @@ const params = new URLSearchParams(location.search);
 const nextPath = safeNext(params.get("next"));
 let pendingEmail = "";
 
+function resetEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = true;
+  $("#email-login")?.setAttribute("aria-expanded", "false");
+}
+
+function showEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  $("#email-login")?.setAttribute("aria-expanded", "true");
+  $("#email-input")?.focus();
+}
+
 function setError(msg = "") {
   const el = $("#auth-error");
   if (el) el.textContent = msg;
@@ -37,6 +50,15 @@ if (!passkeysAvailable()) {
   $("#passkey-login").hidden = true;
   $("#passkey-register-wrap").hidden = true;
 }
+
+$("#email-login")?.addEventListener("click", () => {
+  setError("");
+  if (!$("#email-send-form").hidden) {
+    resetEmailSignIn();
+    return;
+  }
+  showEmailSignIn();
+});
 
 $("#passkey-login")?.addEventListener("click", async () => {
   setError("");
@@ -77,9 +99,7 @@ $("#email-send-form")?.addEventListener("submit", async (e) => {
 
 $("#email-back")?.addEventListener("click", () => {
   setError("");
-  $("#email-verify-form").hidden = true;
-  $("#email-send-form").hidden = false;
-  $("#email-input")?.focus();
+  showEmailSignIn();
 });
 
 $("#email-verify-form")?.addEventListener("submit", async (e) => {

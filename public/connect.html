@@ -37,23 +37,27 @@
     <div id="step-signin" hidden>
       <p class="oauth-step">Sign in to continue</p>
       <div class="auth-stack">
-        <button type="button" id="passkey-login" class="oauth-primary wide">Continue with Passkey</button>
+        <button type="button" id="passkey-login" class="oauth-primary wide auth-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.25"/><path d="M11.2 12.8 20 4v3.5"/><path d="M16.5 5.5 19 8"/></svg>
+          <span>Continue with Passkey</span>
+        </button>
         <button type="button" id="apple-login" class="oauth-secondary wide auth-btn" hidden>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M16.37 12.63c.02 2.27 1.99 3.03 2.01 3.04-.02.05-.31 1.08-1.04 2.14-.63.92-1.29 1.84-2.32 1.86-1.01.02-1.34-.6-2.5-.6-1.16 0-1.53.58-2.48.62-1 .04-1.76-1-2.4-1.91-1.3-1.88-2.3-5.31-.96-7.64.66-1.16 1.85-1.89 3.14-1.91.98-.02 1.91.66 2.5.66.6 0 1.72-.82 2.9-.7.49.02 1.88.2 2.77 1.5-.07.05-1.65.96-1.62 2.94ZM14.47 7.11c.53-.64.88-1.53.79-2.42-.76.03-1.68.51-2.22 1.15-.49.56-.92 1.47-.8 2.34.85.07 1.71-.43 2.23-1.07Z"/></svg>
           <span>Sign in with Apple</span>
         </button>
+        <button type="button" id="email-login" class="oauth-secondary wide auth-btn" aria-expanded="false" aria-controls="email-send-form">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1.2"/><path d="m3.5 6 8.5 6.2L20.5 6"/></svg>
+          <span>Continue with Email</span>
+        </button>
       </div>
-      <details class="oauth-key" id="email-details">
-        <summary>Continue with Email</summary>
-        <form id="email-send-form" autocomplete="on">
-          <label>Email <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
-          <button type="submit" class="oauth-secondary wide">Send 6-digit code</button>
-        </form>
-        <form id="email-verify-form" autocomplete="off" hidden>
-          <label>6-digit code <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
-          <button type="submit" class="oauth-primary wide">Verify code</button>
-        </form>
-      </details>
+      <form id="email-send-form" class="email-auth-form" autocomplete="on" hidden>
+        <label>Email <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
+        <button type="submit" class="oauth-secondary wide">Send 6-digit code</button>
+      </form>
+      <form id="email-verify-form" class="email-auth-form" autocomplete="off" hidden>
+        <label>6-digit code <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]6" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
+        <button type="submit" class="oauth-primary wide">Verify code</button>
+      </form>
       <p class="oauth-sub" id="passkey-create-row">New here? <button type="button" id="passkey-register" class="oauth-switch">Create a passkey</button></p>
       <p class="error" role="alert" id="signin-error"></p>
     </div>

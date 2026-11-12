@@ -196,8 +196,7 @@ async function lock() {
   $("#menu").open = false;
   $("#passkey-offer").hidden = true;
   document.querySelectorAll("form").forEach((f) => f.reset());
-  $("#email-verify-form").hidden = true;
-  $("#email-send-form").hidden = false;
+  resetEmailSignIn();
   show("start");
 }
 
@@ -210,12 +209,33 @@ function openSignIn() {
   $("#menu").open = false;
   $("#passkey-offer").hidden = true;
   document.querySelectorAll("form").forEach((f) => f.reset());
-  $("#email-verify-form").hidden = true;
-  $("#email-send-form").hidden = false;
+  resetEmailSignIn();
   show("start");
 }
 
 let pendingEmail = "";
+
+function resetEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = true;
+  $("#email-login")?.setAttribute("aria-expanded", "false");
+}
+
+function showEmailSignIn() {
+  $("#email-verify-form").hidden = true;
+  $("#email-send-form").hidden = false;
+  $("#email-login")?.setAttribute("aria-expanded", "true");
+  $("#email-input")?.focus();
+}
+
+$("#email-login")?.addEventListener("click", () => {
+  $("#start-error").textContent = "";
+  if (!$("#email-send-form").hidden) {
+    resetEmailSignIn();
+    return;
+  }
+  showEmailSignIn();
+});
 
 $("#passkey-login")?.addEventListener("click", async () => {
   $("#start-error").textContent = "";
@@ -259,9 +279,7 @@ $("#email-send-form")?.addEventListener("submit", async (e) => {
 
 $("#email-back")?.addEventListener("click", () => {
   $("#start-error").textContent = "";
-  $("#email-verify-form").hidden = true;
-  $("#email-send-form").hidden = false;
-  $("#email-input")?.focus();
+  showEmailSignIn();
 });
 
 $("#email-verify-form")?.addEventListener("submit", async (e) => {
