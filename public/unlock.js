@@ -48,7 +48,7 @@ function completeSignIn() {
 
 if (!passkeysAvailable()) {
   $("#passkey-login").hidden = true;
-  $("#passkey-register-wrap").hidden = true;
+  if ($("#passkey-register")) $("#passkey-register").hidden = true;
 }
 
 $("#email-login")?.addEventListener("click", () => {

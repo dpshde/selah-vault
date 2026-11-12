@@ -40,7 +40,6 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1.2"/><path d="m3.5 6 8.5 6.2L20.5 6"/></svg>
         <span>Continue with Email</span>
       </button>
-    </div>
 
     <form id="email-send-form" autocomplete="on" hidden>
       <label for="email-input">Email address <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
@@ -56,8 +55,17 @@
       </div>
     </form>
 
+      <button id="create-passkey" class="wide quiet auth-btn" type="button">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.25"/><path d="M11.2 12.8 20 4v3.5"/><path d="M16.5 5.5 19 8"/></svg>
+        <span>Create a passkey</span>
+      </button>
+    </div>
+
     <p class="error" id="start-error" role="alert"></p>
-    <p class="new-here"><span id="passkey-create-wrap">New here? <button id="create-passkey" class="link" type="button">Create a passkey</button> · </span><button id="open-offline" class="link" type="button">Use offline on this device</button></p>
+    <p class="auth-or"><span>or</span></p>
+    <button id="open-offline" class="wide quiet auth-btn" type="button">
+      <span>Use offline on this device</span>
+    </button>
   </section>
 
   <section id="main" hidden>
@@ -81,7 +89,7 @@
       <p>Add a passkey for one-tap sign-in on this device.</p>
       <div class="row">
         <button type="button" class="quiet" id="offer-passkey">Add a passkey</button>
-        <button type="button" class="link" id="skip-passkey">Not now</button>
+        <button type="button" class="quiet" id="skip-passkey">Not now</button>
       </div>
     </div>
 

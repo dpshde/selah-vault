@@ -2818,7 +2818,7 @@ async function boot() {
   loadConfig();
   if (!passkeysAvailable()) {
     if ($("#passkey-login")) $("#passkey-login").hidden = true;
-    if ($("#passkey-create-wrap")) $("#passkey-create-wrap").hidden = true;
+    if ($("#create-passkey")) $("#create-passkey").hidden = true;
     if ($("#add-passkey")) $("#add-passkey").hidden = true;
   }
   const request = takeSaveLink();

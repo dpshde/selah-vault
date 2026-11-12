@@ -1681,10 +1681,17 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
 /* The start screen: passkey, Apple, or email 6-digit code. */
 button.wide { width: 100%; padding: .8125rem 1rem; }
 .auth-stack { display: grid; gap: .625rem; margin: 0 0 .5rem; }
+.auth-stack form { margin: 0; }
 .auth-btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; }
 .auth-btn svg { flex: none; }
 /* display:inline-flex would otherwise override the UA [hidden] rule and leave a blank slot. */
 .auth-btn[hidden] { display: none; }
+.auth-or { display: flex; align-items: center; gap: .75rem; margin: 1.25rem 0 .75rem; color: var(--muted); font-family: var(--font-label); font-size: .75rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; }
+.auth-or::before, .auth-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+@media (max-width: 600px) {
+  .auth-stack .auth-btn,
+  #open-offline { min-height: 44px; }
+}
 .grants-panel { width: 100%; padding: .875rem 0; border-bottom: 1px solid var(--line); }
 .grants-panel .subhead { font-size: .875rem; font-weight: 600; margin: 0 0 .5rem; color: var(--fg); letter-spacing: -.01em; }
 .grants-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
@@ -1861,8 +1868,6 @@ button.quiet:disabled:hover { background: transparent; border-color: var(--line)
 #start.has-passkey #unlock-form button[type="submit"]:hover { background: var(--hover); border-color: var(--hover-line); }
 #start label.light { font-size: .8125rem; }
 #start label.light input { padding: .5rem .875rem; font-size: .9375rem; }
-.new-here { margin: 2.5rem 0 0; color: var(--muted); font-size: .875rem; }
-.new-here button.link { display: inline; flex: none; color: var(--fg); text-decoration: underline; text-underline-offset: .2em; font-size: inherit; }
 
 /* The footer, route.bible's .shell-meta: small square-cornered chips in a row at the bottom right, at
    85% like its landing bar. It sits after the page in the flow (pushed to the bottom of the screen when

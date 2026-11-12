@@ -49,16 +49,21 @@
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1.2"/><path d="m3.5 6 8.5 6.2L20.5 6"/></svg>
           <span>Continue with Email</span>
         </button>
-      </div>
+
       <form id="email-send-form" class="email-auth-form" autocomplete="on" hidden>
         <label>Email <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit" class="oauth-secondary wide">Send 6-digit code</button>
       </form>
       <form id="email-verify-form" class="email-auth-form" autocomplete="off" hidden>
-        <label>6-digit code <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]6" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
+        <label>6-digit code <input id="otp-input" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="123456" required></label>
         <button type="submit" class="oauth-primary wide">Verify code</button>
       </form>
-      <p class="oauth-sub" id="passkey-create-row">New here? <button type="button" id="passkey-register" class="oauth-switch">Create a passkey</button></p>
+
+        <button type="button" id="passkey-register" class="oauth-secondary wide auth-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.25"/><path d="M11.2 12.8 20 4v3.5"/><path d="M16.5 5.5 19 8"/></svg>
+          <span>Create a passkey</span>
+        </button>
+      </div>
       <p class="error" role="alert" id="signin-error"></p>
     </div>
 

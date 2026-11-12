@@ -35,7 +35,6 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="1.2"/><path d="m3.5 6 8.5 6.2L20.5 6"/></svg>
         <span>Continue with Email</span>
       </button>
-    </div>
 
     <form id="email-send-form" autocomplete="on" hidden>
       <label for="email-input">Email address
@@ -55,8 +54,13 @@
       </div>
     </form>
 
+      <button type="button" id="passkey-register" class="wide quiet auth-btn">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.25"/><path d="M11.2 12.8 20 4v3.5"/><path d="M16.5 5.5 19 8"/></svg>
+        <span>Create a passkey</span>
+      </button>
+    </div>
+
     <p class="error" id="auth-error" role="alert"></p>
-    <p class="new-here" id="passkey-register-wrap">New here? <button type="button" id="passkey-register" class="link">Create a passkey</button></p>
   </section>
 </main>
 <footer class="shell-meta">
