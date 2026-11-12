@@ -16,7 +16,8 @@ body.oauth { justify-content: center; }
 .oauth-account { display: flex; align-items: center; gap: .65rem; padding: .65rem .75rem; border: 1px solid var(--line-subtle); background: var(--bg); text-align: left; }
 .oauth-avatar { flex: 0 0 auto; width: 2rem; height: 2rem; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: .9rem; }
 .oauth-account__text { flex: 1 1 auto; min-width: 0; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oauth-switch { flex: 0 0 auto; width: auto; background: none; border: 0; padding: .25rem; color: var(--fg-2); text-decoration: underline; text-underline-offset: 3px; font: inherit; font-size: .82rem; cursor: pointer; }
+.oauth-switch { flex: 0 0 auto; width: auto; padding: .3125rem .7rem; background: transparent; color: var(--fg); border: 1px solid var(--line); font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer; text-decoration: none; }
+.oauth-switch:hover { background: var(--hover); border-color: var(--hover-line); }
 .oauth-perms { list-style: none; margin: 0 0 1.25rem; padding: 0; text-align: left; border-top: 1px solid var(--line-subtle); }
 .oauth-perms li { display: flex; align-items: center; gap: .7rem; padding: .7rem .1rem; border-bottom: 1px solid var(--line-subtle); font-size: .9rem; }
 .oauth-perms svg { flex: 0 0 auto; width: 1.15rem; height: 1.15rem; color: var(--fg-2); }
@@ -32,4 +33,4 @@ body.oauth { justify-content: center; }
 .oauth-foot { margin: 1.1rem 0 0; color: var(--muted); font-size: .75rem; }
 .oauth .error:empty { display: none; }
 @media (max-width: 420px) { .oauth-actions { grid-template-columns: 1fr; } .oauth-actions #allow { order: -1; } .oauth-card { padding: 1.5rem 1.1rem 1.1rem; } }
-/* asset-rev 3 */
+/* asset-rev 4 */

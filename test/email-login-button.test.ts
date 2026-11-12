@@ -12,8 +12,22 @@ const unlockJs = read("public/unlock.js");
 const connectJs = read("public/connect.js");
 
 function authStack(html: string) {
-  const match = /<div class="auth-stack"[^>]*>[\s\S]*?<\/div>/.exec(html);
-  return match?.[0] ?? "";
+  const start = html.search(/<div class="auth-stack"/);
+  if (start < 0) return "";
+  let i = html.indexOf(">", start) + 1, depth = 1;
+  while (i < html.length && depth) {
+    const nextOpen = html.indexOf("<div", i);
+    const nextClose = html.indexOf("</div>", i);
+    if (nextClose < 0) break;
+    if (nextOpen >= 0 && nextOpen < nextClose) {
+      depth++;
+      i = nextOpen + 4;
+    } else {
+      depth--;
+      i = nextClose + 6;
+    }
+  }
+  return html.slice(start, i);
 }
 
 function button(html: string, id: string) {

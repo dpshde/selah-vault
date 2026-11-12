@@ -135,7 +135,7 @@ if (!validRequest) {
   show("card");
   if (!passkeysAvailable()) {
     $("#passkey-login").hidden = true;
-    $("#passkey-create-row").hidden = true;
+    if ($("#passkey-register")) $("#passkey-register").hidden = true;
     showEmailSignIn();
   }
   fetchSession().then((user) => {
